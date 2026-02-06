@@ -12,7 +12,7 @@ from nuscenes.eval.common.utils import Quaternion
 from nuscenes.utils.geometry_utils import transform_matrix
 from torch.utils.data import DataLoader
 from models.utils import sparse2dense
-from .old_metrics import Metric_mIoU_Occ3D_Custom
+from .old_metrics import Metric_mIoU_Tartan_Custom
 from .utils import compose_ego2img
 
 
@@ -179,13 +179,10 @@ class TartangroundOcc3DDataset(BaseDataset):
         return results_dict
 
     def eval_miou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        occ_gts = []
-        occ_preds = []
-        lidar_origins = []
-
+        
         print('\nStarting Evaluation...')
         empty_label = 79
-        metric = Metric_mIoU_Occ3D_Custom(
+        metric = Metric_mIoU_Tartan_Custom(
             num_classes=empty_label + 1,
             empty_label=empty_label,
             use_image_mask=True)

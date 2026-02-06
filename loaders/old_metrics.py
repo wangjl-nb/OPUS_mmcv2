@@ -153,7 +153,7 @@ class Metric_mIoU_Occ3D():
         return round(np.nanmean(mIoU[:self.num_classes-1]) * 100, 2)
 
 
-class Metric_mIoU_Occ3D_Custom():
+class Metric_mIoU_Tartan_Custom():
     def __init__(self,
                  save_dir='.',
                  num_classes=None,

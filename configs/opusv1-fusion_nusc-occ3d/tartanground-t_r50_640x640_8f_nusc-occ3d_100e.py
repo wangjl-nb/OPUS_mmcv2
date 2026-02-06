@@ -31,6 +31,7 @@ occ_names = ['others', 'bathroompartition', 'binder', 'blinds', 'book', 'bottle'
              'sign', 'sink', 'skysphere', 'smartphone', 'smokedetector', 'soapdispenser', 'sofa', 
              'sticker', 'table', 'tabletpc', 'toilet', 'trashcan', 'tray', 'tv', 'urinal', 'vase', 
              'wall', 'watercooler', 'whiteboardmagnet', 'window', 'writingmat', 'z']
+occ_eval_names = occ_names + ['free']
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -298,10 +299,10 @@ val_evaluator = dict(
     occ_root=occ_root,
     empty_label=79,
     use_camera_mask=True,
-    compute_rayiou=True,
+    compute_rayiou=False,
     pc_range=point_cloud_range,
     voxel_size=voxel_size[0],
-    class_names=occ_names,
+    class_names=occ_eval_names,
     miou_num_workers=32,
 )
 test_evaluator = dict(
@@ -310,10 +311,10 @@ test_evaluator = dict(
     occ_root=occ_root,
     empty_label=79,
     use_camera_mask=True,
-    compute_rayiou=True,
+    compute_rayiou=False,
     pc_range=point_cloud_range,
     voxel_size=voxel_size[0],
-    class_names=occ_names,
+    class_names=occ_eval_names,
     miou_num_workers=32,
 )
 

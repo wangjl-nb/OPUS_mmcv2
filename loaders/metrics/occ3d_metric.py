@@ -11,7 +11,7 @@ from mmengine.registry import METRICS
 
 from models.utils import sparse2dense
 from ..ego_pose_dataset import EgoPoseDataset
-from ..old_metrics import Metric_mIoU_Occ3D_Custom, Metric_mIoU_Occupancy
+from ..old_metrics import Metric_mIoU_Tartan_Custom, Metric_mIoU_Occupancy
 from ..ray_metrics import main_custom as calc_rayiou_custom
 
 
@@ -24,6 +24,24 @@ def _load_infos(ann_file):
     if isinstance(data, list):
         return data
     raise TypeError(f'Unsupported annotation format: {type(data)}')
+
+
+def _compute_occupied_iou(hist, empty_label):
+    hist = np.asarray(hist)
+    if hist.ndim != 2 or hist.shape[0] != hist.shape[1]:
+        return np.nan
+    num_classes = hist.shape[0]
+    if empty_label is None or empty_label < 0 or empty_label >= num_classes:
+        return np.nan
+    occ_mask = np.ones(num_classes, dtype=bool)
+    occ_mask[empty_label] = False
+    tp = hist[np.ix_(occ_mask, occ_mask)].sum()
+    fp = hist[empty_label, occ_mask].sum()
+    fn = hist[occ_mask, empty_label].sum()
+    denom = tp + fp + fn
+    if denom <= 0:
+        return np.nan
+    return float(tp) / float(denom)
 
 
 @METRICS.register_module()
@@ -75,7 +93,7 @@ class Occ3DMetric(BaseMetric):
         if any(v is None for v in ordered):
             ordered = results
 
-        metric = Metric_mIoU_Occ3D_Custom(
+        metric = Metric_mIoU_Tartan_Custom(
             num_classes=self.empty_label + 1,
             class_names=self.class_names,
             empty_label=self.empty_label,
@@ -130,7 +148,11 @@ class Occ3DMetric(BaseMetric):
             for occ_pred, occ_labels, mask_lidar, mask_camera in hist_list:
                 metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
 
-        metrics = {'mIoU': metric.count_miou()}
+        occ_iou = _compute_occupied_iou(metric.hist, self.empty_label)
+        metrics = {
+            'mIoU': metric.count_miou(),
+            'IoU': round(occ_iou * 100, 2) if not np.isnan(occ_iou) else np.nan,
+        }
 
         if not self.compute_rayiou:
             return metrics
