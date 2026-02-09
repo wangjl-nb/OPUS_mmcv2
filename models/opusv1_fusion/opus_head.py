@@ -332,6 +332,7 @@ class OPUSV1FusionHead(BaseModule):
         B, W, H, Z = voxel_semantics.shape
         device = voxel_semantics.device
         voxel_semantics = voxel_semantics.long()
+        hard_camera_mask = self.train_cfg.get('hard_camera_mask', False)
 
         x = torch.arange(0, W, dtype=torch.float32, device=device)
         x = (x + 0.5) / W * self.scene_size[0] + self.pc_range[0]
@@ -342,15 +343,25 @@ class OPUSV1FusionHead(BaseModule):
 
         xx = x[:, None, None].expand(W, H, Z)
         yy = y[None, :, None].expand(W, H, Z)
-        zz = z[None, None, :].expand(W, W, Z)
+        zz = z[None, None, :].expand(W, H, Z)
         coors = torch.stack([xx, yy, zz], dim=-1) # actual space
 
         gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
-            mask = voxel_semantics[i] != self.empty_label
-            gt_points.append(coors[mask])
-            gt_masks.append(mask_camera[i][mask]) # camera mask and not empty
-            gt_labels.append(voxel_semantics[i][mask])
+            non_empty_mask = voxel_semantics[i] != self.empty_label
+            if hard_camera_mask:
+                visible_mask = mask_camera[i].bool()
+                final_mask = non_empty_mask & visible_mask
+            else:
+                final_mask = non_empty_mask
+
+            gt_points.append(coors[final_mask])
+            gt_labels.append(voxel_semantics[i][final_mask])
+            if hard_camera_mask:
+                gt_masks.append(torch.ones_like(gt_labels[-1], dtype=torch.bool))
+            else:
+                # Legacy behavior: use camera visibility to reweight non-empty GT.
+                gt_masks.append(mask_camera[i][non_empty_mask])
 
         for i, pts in enumerate(gt_points):
             if pts.numel() == 0:

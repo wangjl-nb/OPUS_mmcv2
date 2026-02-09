@@ -1,18 +1,15 @@
 import os
-import numpy as np
-import torch
-import pickle
 import os.path as osp
-from tqdm import tqdm
+import warnings
+
+import numpy as np
 from mmengine.dataset import BaseDataset
 from mmengine.fileio import load
 from mmengine.utils import mkdir_or_exist
 from mmdet3d.registry import DATASETS
-from nuscenes.eval.common.utils import Quaternion
-from nuscenes.utils.geometry_utils import transform_matrix
-from torch.utils.data import DataLoader
-from models.utils import sparse2dense
-from .old_metrics import Metric_mIoU_Tartan_Custom
+from tqdm import tqdm
+
+from .geometry import quaternion_to_matrix, transform_matrix
 from .utils import compose_ego2img
 
 
@@ -25,10 +22,12 @@ class TartangroundOcc3DDataset(BaseDataset):
                  modality,
                  classes=None,
                  occ_root=None,
+                 dataset_cfg=None,
                  test_mode=False,
                  **kwargs):
         self.modality = modality
         self.occ_root = occ_root
+        self.dataset_cfg = dataset_cfg or {}
         kwargs.setdefault('serialize_data', False)
         metainfo = dict(classes=classes) if classes is not None else None
         super().__init__(
@@ -50,7 +49,7 @@ class TartangroundOcc3DDataset(BaseDataset):
         else:
             raise TypeError(f'Unsupported annotation format: {type(data)}')
         return self.data_infos
-    
+
     def collect_cam_sweeps(self, index, into_past=150, into_future=0):
         all_sweeps_prev = []
         curr_index = index
@@ -61,7 +60,7 @@ class TartangroundOcc3DDataset(BaseDataset):
             all_sweeps_prev.extend(curr_sweeps)
             all_sweeps_prev.append(self.data_infos[curr_index - 1]['cams'])
             curr_index = curr_index - 1
-        
+
         all_sweeps_next = []
         curr_index = index + 1
         while len(all_sweeps_next) < into_future:
@@ -83,7 +82,7 @@ class TartangroundOcc3DDataset(BaseDataset):
                 break
             all_sweeps_prev.extend(curr_sweeps)
             curr_index = curr_index - 1
-        
+
         all_sweeps_next = []
         curr_index = index + 1
         last_timestamp = self.data_infos[index]['timestamp']
@@ -91,8 +90,11 @@ class TartangroundOcc3DDataset(BaseDataset):
             if curr_index >= len(self.data_infos):
                 break
             curr_sweeps = self.data_infos[curr_index]['lidar_sweeps'][::-1]
-            if curr_sweeps[0]['timestamp'] == last_timestamp:
+            if curr_sweeps and curr_sweeps[0]['timestamp'] == last_timestamp:
                 curr_sweeps = curr_sweeps[1:]
+            if not curr_sweeps:
+                curr_index = curr_index + 1
+                continue
             all_sweeps_next.extend(curr_sweeps)
             curr_index = curr_index + 1
             last_timestamp = all_sweeps_next[-1]['timestamp']
@@ -106,10 +108,11 @@ class TartangroundOcc3DDataset(BaseDataset):
         ego2global_rotation = info['ego2global_rotation']
         lidar2ego_translation = info['lidar2ego_translation']
         lidar2ego_rotation = info['lidar2ego_rotation']
-        ego2global_rotation_mat = Quaternion(ego2global_rotation).rotation_matrix
-        lidar2ego_rotation_mat = Quaternion(lidar2ego_rotation).rotation_matrix
+
+        ego2global_rotation_mat = quaternion_to_matrix(ego2global_rotation)
+        lidar2ego_rotation_mat = quaternion_to_matrix(lidar2ego_rotation)
         ego2lidar = transform_matrix(
-            lidar2ego_translation, Quaternion(lidar2ego_rotation), inverse=True)
+            lidar2ego_translation, lidar2ego_rotation, inverse=True)
 
         input_dict = dict(
             sample_token=info['token'],
@@ -136,6 +139,7 @@ class TartangroundOcc3DDataset(BaseDataset):
             img_paths = []
             img_timestamps = []
             ego2img = []
+            cam_types = list(info['cams'].keys())
 
             for _, cam_info in info['cams'].items():
                 img_paths.append(os.path.relpath(cam_info['data_path']))
@@ -157,6 +161,8 @@ class TartangroundOcc3DDataset(BaseDataset):
                 img_timestamp=img_timestamps,
                 ego2img=ego2img,
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
+                cam_types=cam_types,
+                num_views=len(cam_types),
             ))
 
         if not self.test_mode:
@@ -164,107 +170,65 @@ class TartangroundOcc3DDataset(BaseDataset):
                 gt_bboxes_3d=np.array([[[]]]),
                 gt_labels_3d=np.array([[[]]]),
                 gt_names=np.array([[[]]]))
-            
             input_dict['ann_info'] = annos
 
         input_dict['sample_idx'] = index
         return input_dict
-    
-    def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        results_dict = {}
-        results_dict.update(
-            self.eval_miou(occ_results, runner=runner, show_dir=show_dir, **eval_kwargs))
-        results_dict.update(
-            self.eval_riou(occ_results, runner=runner, show_dir=show_dir, **eval_kwargs))
-        return results_dict
 
-    def eval_miou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        
-        print('\nStarting Evaluation...')
-        empty_label = 79
-        metric = Metric_mIoU_Tartan_Custom(
-            num_classes=empty_label + 1,
-            empty_label=empty_label,
-            use_image_mask=True)
+    def _build_metric(self, eval_kwargs):
+        from .metrics.occ3d_metric import Occ3DMetric
 
-        from tqdm import tqdm
-        for i in tqdm(range(len(occ_results))):
-            result_dict = occ_results[i]
-            info = self.get_data_info(i)
-            token = info['sample_token']
-            scene_name = info['scene_name']
-            occ_root = self.occ_root or osp.join(self.data_root, 'gts')
-            occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
-            occ_infos = np.load(occ_file)
+        occ_io_cfg = self.dataset_cfg.get('occ_io', {})
+        metric_cfg = self.dataset_cfg.get('metric', {})
+        ray_cfg = self.dataset_cfg.get('ray', {})
 
-            occ_labels = occ_infos['semantics']
-            mask_lidar = occ_infos['mask_lidar'].astype(np.bool_)
-            mask_camera = occ_infos['mask_camera'].astype(np.bool_)
-
-            occ_pred, _ = sparse2dense(
-                result_dict['occ_loc'],
-                result_dict['sem_pred'],
-                dense_shape=occ_labels.shape,
-                empty_value=79)
-            
-            metric.add_batch(occ_pred, occ_labels, mask_lidar, mask_camera)
-        
-        return {'mIoU': metric.count_miou()}
-    
-    def eval_riou(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        occ_gts = []
-        occ_preds = []
-        lidar_origins = []
-
-        print('\nStarting Evaluation...')
-
-        from .ray_metrics import main as calc_rayiou
-        from .ego_pose_dataset import EgoPoseDataset
-
-        data_loader = DataLoader(
-            EgoPoseDataset(self.data_infos),
-            batch_size=1,
-            shuffle=False,
-            num_workers=8
+        return Occ3DMetric(
+            ann_file=self.ann_file,
+            occ_root=eval_kwargs.get('occ_root', self.occ_root or osp.join(self.data_root, 'gts')),
+            empty_label=eval_kwargs.get(
+                'empty_label', self.dataset_cfg.get('empty_label', metric_cfg.get('empty_label', 79))),
+            use_camera_mask=eval_kwargs.get(
+                'use_camera_mask', metric_cfg.get('use_camera_mask', True)),
+            compute_rayiou=eval_kwargs.get(
+                'compute_rayiou', metric_cfg.get('compute_rayiou', True)),
+            pc_range=eval_kwargs.get('pc_range', self.dataset_cfg.get('pc_range', None)),
+            voxel_size=eval_kwargs.get('voxel_size', self.dataset_cfg.get('voxel_size', None)),
+            class_names=eval_kwargs.get('class_names', self.dataset_cfg.get('class_names', None)),
+            miou_num_workers=eval_kwargs.get(
+                'miou_num_workers', metric_cfg.get('miou_num_workers', 0)),
+            occ_path_template=eval_kwargs.get(
+                'occ_path_template', occ_io_cfg.get('path_template', '{scene_name}/{token}/labels.npz')),
+            semantics_key=eval_kwargs.get(
+                'semantics_key', occ_io_cfg.get('semantics_key', 'semantics')),
+            mask_camera_key=eval_kwargs.get(
+                'mask_camera_key', occ_io_cfg.get('mask_camera_key', 'mask_camera')),
+            mask_lidar_key=eval_kwargs.get(
+                'mask_lidar_key', occ_io_cfg.get('mask_lidar_key', 'mask_lidar')),
+            ray_num_workers=eval_kwargs.get('ray_num_workers', ray_cfg.get('num_workers', 8)),
+            ray_cfg=eval_kwargs.get('ray_cfg', ray_cfg),
         )
-        
-        sample_tokens = [info['token'] for info in self.data_infos]
 
-        for i, batch in enumerate(data_loader):
-            token = batch[0][0]
-            output_origin = batch[1]
-            
-            data_id = sample_tokens.index(token)
-            info = self.data_infos[data_id]
+    def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
+        warnings.warn(
+            'TartangroundOcc3DDataset.evaluate is deprecated; please use mmengine '
+            'evaluators (Occ3DMetric) via val_evaluator/test_evaluator.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        metric = self._build_metric(eval_kwargs)
+        packed_results = [
+            dict(pred=pred, sample_idx=i)
+            for i, pred in enumerate(occ_results)
+        ]
+        return metric.compute_metrics(packed_results)
 
-            token = info['token']
-            scene_name = info['scene_name']
-            occ_root = self.occ_root or osp.join(self.data_root, 'gts')
-            occ_file = osp.join(occ_root, scene_name, token, 'labels.npz')
-            occ_infos = np.load(occ_file)
-            gt_semantics = occ_infos['semantics']
-
-            occ_pred = occ_results[data_id]
-            sem_pred = torch.from_numpy(occ_pred['sem_pred'])  # [B, N]
-            occ_loc = torch.from_numpy(occ_pred['occ_loc'].astype(np.int64))  # [B, N, 3]
-            
-            occ_size = list(gt_semantics.shape)
-            dense_sem_pred, _ = sparse2dense(occ_loc, sem_pred, dense_shape=occ_size, empty_value=79)
-            dense_sem_pred = dense_sem_pred.squeeze(0).numpy()
-
-            lidar_origins.append(output_origin)
-            occ_gts.append(gt_semantics)
-            occ_preds.append(dense_sem_pred)
-        
-        return calc_rayiou(occ_preds, occ_gts, lidar_origins)
-
-    def format_results(self, occ_results,submission_prefix,**kwargs):
+    def format_results(self, occ_results, submission_prefix, **kwargs):
         if submission_prefix is not None:
             mkdir_or_exist(submission_prefix)
 
         for index, occ_pred in enumerate(tqdm(occ_results)):
             info = self.data_infos[index]
             sample_token = info['token']
-            save_path=os.path.join(submission_prefix, '{}.npz'.format(sample_token))
-            np.savez_compressed(save_path,occ_pred.astype(np.uint8))
+            save_path = os.path.join(submission_prefix, f'{sample_token}.npz')
+            np.savez_compressed(save_path, occ_pred.astype(np.uint8))
         print('\nFinished.')

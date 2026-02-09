@@ -17,7 +17,7 @@ from mmengine.config import Config, DictAction
 from mmengine.dataset import DefaultSampler, pseudo_collate
 from mmengine.runner import load_checkpoint, set_random_seed
 from mmdet3d.registry import DATASETS, MODELS
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, Subset
 
 
 def build_palette(num_classes):
@@ -152,15 +152,77 @@ def normalize_inference_inputs(inputs):
     return inputs
 
 
+def load_occ_infos(base_dataset, scene_name, token):
+    if scene_name is None or token is None:
+        return None
+
+    occ_root = getattr(base_dataset, 'occ_root', None)
+    if not occ_root:
+        data_root = getattr(base_dataset, 'data_root', None)
+        if data_root is None:
+            return None
+        occ_root = osp.join(data_root, 'gts')
+
+    dataset_cfg = getattr(base_dataset, 'dataset_cfg', {}) or {}
+    occ_io_cfg = dataset_cfg.get('occ_io', {})
+    occ_template = occ_io_cfg.get('path_template', '{scene_name}/{token}/labels.npz')
+    occ_rel_path = occ_template.format(scene_name=scene_name, token=str(token))
+    occ_file = osp.join(occ_root, occ_rel_path)
+    if not osp.exists(occ_file):
+        return None
+
+    with np.load(occ_file) as occ_raw:
+        return {k: occ_raw[k] for k in occ_raw.files}
+
+
+def get_mask_camera(data_sample, base_dataset):
+    if hasattr(data_sample, 'mask_camera'):
+        mask_camera = getattr(data_sample, 'mask_camera')
+        if torch.is_tensor(mask_camera):
+            mask_camera = mask_camera.detach().cpu().numpy()
+        else:
+            mask_camera = np.asarray(mask_camera)
+        return mask_camera.astype(np.bool_), None
+
+    scene_name = data_sample.metainfo.get('scene_name', None)
+    sample_token = data_sample.metainfo.get('sample_token', None)
+    occ_infos = load_occ_infos(base_dataset, scene_name, sample_token)
+    if occ_infos is None or 'mask_camera' not in occ_infos:
+        return None, occ_infos
+    return occ_infos['mask_camera'].astype(np.bool_), occ_infos
+
+
+def apply_dense_mask(occ_loc, labels, dense_mask):
+    if dense_mask is None or occ_loc.size == 0:
+        return occ_loc, labels
+
+    occ_idx = occ_loc.astype(np.int64)
+    inside = (
+        (occ_idx[:, 0] >= 0) & (occ_idx[:, 0] < dense_mask.shape[0]) &
+        (occ_idx[:, 1] >= 0) & (occ_idx[:, 1] < dense_mask.shape[1]) &
+        (occ_idx[:, 2] >= 0) & (occ_idx[:, 2] < dense_mask.shape[2])
+    )
+    keep = np.zeros(occ_idx.shape[0], dtype=np.bool_)
+    if np.any(inside):
+        valid_idx = occ_idx[inside]
+        keep[inside] = dense_mask[valid_idx[:, 0], valid_idx[:, 1], valid_idx[:, 2]]
+
+    return occ_loc[keep], labels[keep]
+
+
 def main():
     parser = argparse.ArgumentParser(description='Inference demo with visualization')
     parser.add_argument('--config', required=True, help='Path to config file')
     parser.add_argument('--weights', required=True, help='Path to checkpoint')
     parser.add_argument('--save-dir', type=str, default='demo_outputs', help='Output directory')
-    parser.add_argument('--split', choices=['val', 'test'], default='test', help='Dataset split')
+    parser.add_argument('--split', choices=['train', 'val', 'test'], default='test', help='Dataset split')
     parser.add_argument('--batch-size', type=int, default=1, help='Batch size for inference')
     parser.add_argument('--num-workers', type=int, default=4, help='DataLoader workers')
     parser.add_argument('--max-samples', type=int, default=-1, help='Max samples to run')
+    parser.add_argument('--num-shards', type=int, default=1,
+                        help='Split dataset into N shards for multi-process/multi-GPU inference')
+    parser.add_argument('--shard-id', type=int, default=0,
+                        help='Shard index in [0, num_shards-1]')
     parser.add_argument('--max-points', type=int, default=200000, help='Max points to draw')
     parser.add_argument('--save-pred-ply', action='store_true', help='Save predicted points as PLY')
     parser.add_argument('--save-gt-ply', action='store_true', help='Save GT points as PLY')
@@ -168,6 +230,8 @@ def main():
     parser.add_argument('--gt-mask', choices=['none', 'camera', 'lidar'], default='camera',
                         help='Mask for GT voxels')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
+    parser.add_argument('--random-train-sample', action='store_true',
+                        help='Run inference on one random sample from train split')
     parser.add_argument('--deterministic', action='store_true',
                         help='Enable deterministic algorithms')
     parser.add_argument('--override', nargs='+', action=DictAction, help='Override config')
@@ -200,6 +264,8 @@ def main():
 
     if args.split == 'test':
         dataset_cfg = cfg.test_dataloader.dataset
+    elif args.split == 'train':
+        dataset_cfg = cfg.train_dataloader.dataset
     else:
         dataset_cfg = cfg.val_dataloader.dataset
 
@@ -208,6 +274,29 @@ def main():
             p['force_offline'] = True
 
     dataset = DATASETS.build(dataset_cfg)
+    base_dataset = dataset
+
+    if args.random_train_sample:
+        if args.split != 'train':
+            raise ValueError('--random-train-sample can only be used with --split train')
+        rng = np.random.default_rng(args.seed)
+        rand_index = int(rng.integers(0, len(dataset)))
+        print(f'[InferenceDemo] Selected random train index: {rand_index}/{len(dataset)}')
+        dataset = Subset(dataset, [rand_index])
+        args.batch_size = 1
+        if args.max_samples < 0 or args.max_samples > 1:
+            args.max_samples = 1
+
+    if args.num_shards < 1:
+        raise ValueError('--num-shards must be >= 1')
+    if not (0 <= args.shard_id < args.num_shards):
+        raise ValueError('--shard-id must satisfy 0 <= shard_id < num_shards')
+    if args.num_shards > 1:
+        shard_indices = list(range(args.shard_id, len(dataset), args.num_shards))
+        print(f'[InferenceDemo] Using shard {args.shard_id}/{args.num_shards}, ' 
+              f'samples: {len(shard_indices)}/{len(dataset)}')
+        dataset = Subset(dataset, shard_indices)
+
     sampler = DefaultSampler(dataset, shuffle=False)
     dataloader = DataLoader(
         dataset,
@@ -231,6 +320,7 @@ def main():
     palette = build_palette(num_classes)
 
     processed = 0
+    camera_mask_warned = False
     with torch.no_grad():
         for batch_idx, data in enumerate(dataloader):
             inputs = move_to_device(data['inputs'], device)
@@ -239,11 +329,21 @@ def main():
             results = model(inputs=inputs, data_samples=data_samples, mode='predict')
 
             for i, result in enumerate(results):
-                sample_idx = data_samples[i].metainfo.get('sample_idx', batch_idx)
-                token = data_samples[i].metainfo.get('sample_token', sample_idx)
+                sample = data_samples[i]
+                sample_idx = sample.metainfo.get('sample_idx', batch_idx)
+                token = sample.metainfo.get('sample_token', sample_idx)
+                scene_name = sample.metainfo.get('scene_name', None)
 
-                labels = result['sem_pred']
-                occ_loc = result['occ_loc']
+                labels = np.asarray(result['sem_pred'])
+                occ_loc = np.asarray(result['occ_loc'])
+
+                mask_camera, occ_infos = get_mask_camera(sample, base_dataset)
+                if mask_camera is None:
+                    if not camera_mask_warned:
+                        print('[InferenceDemo] mask_camera not found, keep unmasked predictions.')
+                        camera_mask_warned = True
+                else:
+                    occ_loc, labels = apply_dense_mask(occ_loc, labels, mask_camera)
 
                 if labels.size == 0:
                     continue
@@ -254,9 +354,10 @@ def main():
                     choice = np.random.choice(labels.shape[0], args.max_points, replace=False)
                     x, y, z, labels = x[choice], y[choice], z[choice], labels[choice]
 
+                labels = labels.astype(np.int64, copy=False)
                 img = visualize_occ(
                     x, y, z,
-                    labels.astype(np.int64),
+                    labels,
                     palette,
                     voxel_size[0],
                     vmin=0,
@@ -266,24 +367,23 @@ def main():
 
                 if args.save_pred_ply:
                     pred_xyz = np.stack([x, y, z], axis=1)
-                    pred_rgb = palette[labels.astype(np.int64)]
+                    pred_rgb = palette[labels]
                     ply_path = osp.join(work_dir, f'{sample_idx:0>6}_{token}_pred.ply')
                     write_ply(ply_path, pred_xyz, rgb=pred_rgb, labels=labels)
 
                 if args.save_gt_ply:
-                    scene_name = data_samples[i].metainfo.get('scene_name', None)
                     if scene_name is None:
                         continue
-                    occ_root = dataset.occ_root or osp.join(dataset.data_root, 'gts')
-                    occ_file = osp.join(occ_root, scene_name, str(token), 'labels.npz')
-                    if not osp.exists(occ_file):
+                    if occ_infos is None:
+                        occ_infos = load_occ_infos(base_dataset, scene_name, token)
+                    if occ_infos is None or 'semantics' not in occ_infos:
                         continue
-                    occ_infos = np.load(occ_file)
+
                     occ_labels = occ_infos['semantics']
                     mask = occ_labels != empty_label
-                    if args.gt_mask == 'camera':
+                    if args.gt_mask == 'camera' and 'mask_camera' in occ_infos:
                         mask = mask & occ_infos['mask_camera'].astype(np.bool_)
-                    elif args.gt_mask == 'lidar':
+                    elif args.gt_mask == 'lidar' and 'mask_lidar' in occ_infos:
                         mask = mask & occ_infos['mask_lidar'].astype(np.bool_)
 
                     gt_pos = np.argwhere(mask)

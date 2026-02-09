@@ -1,19 +1,16 @@
 import os
-import numpy as np
-import torch
-import pickle
 import os.path as osp
-from tqdm import tqdm
+import warnings
+
+import numpy as np
 from mmengine.dataset import BaseDataset
 from mmengine.fileio import load
 from mmengine.utils import mkdir_or_exist
 from mmdet3d.registry import DATASETS
-from nuscenes.eval.common.utils import Quaternion
-from nuscenes.utils.geometry_utils import transform_matrix
-from torch.utils.data import DataLoader
-from models.utils import sparse2dense
+from tqdm import tqdm
+
+from .geometry import quaternion_to_matrix, transform_matrix
 from .utils import compose_ego2img
-from .old_metrics import Metric_mIoU_Occupancy
 
 
 @DATASETS.register_module()
@@ -25,10 +22,12 @@ class NuScenesOccupancyDataset(BaseDataset):
                  modality,
                  classes=None,
                  occ_root=None,
+                 dataset_cfg=None,
                  test_mode=False,
                  **kwargs):
         self.modality = modality
         self.occ_root = occ_root
+        self.dataset_cfg = dataset_cfg or {}
         kwargs.setdefault('serialize_data', False)
         metainfo = dict(classes=classes) if classes is not None else None
         super().__init__(
@@ -50,7 +49,7 @@ class NuScenesOccupancyDataset(BaseDataset):
         else:
             raise TypeError(f'Unsupported annotation format: {type(data)}')
         return self.data_infos
-    
+
     def collect_cam_sweeps(self, index, into_past=150, into_future=0):
         all_sweeps_prev = []
         curr_index = index
@@ -61,7 +60,7 @@ class NuScenesOccupancyDataset(BaseDataset):
             all_sweeps_prev.extend(curr_sweeps)
             all_sweeps_prev.append(self.data_infos[curr_index - 1]['cams'])
             curr_index = curr_index - 1
-        
+
         all_sweeps_next = []
         curr_index = index + 1
         while len(all_sweeps_next) < into_future:
@@ -83,7 +82,7 @@ class NuScenesOccupancyDataset(BaseDataset):
                 break
             all_sweeps_prev.extend(curr_sweeps)
             curr_index = curr_index - 1
-        
+
         all_sweeps_next = []
         curr_index = index + 1
         last_timestamp = self.data_infos[index]['timestamp']
@@ -91,8 +90,11 @@ class NuScenesOccupancyDataset(BaseDataset):
             if curr_index >= len(self.data_infos):
                 break
             curr_sweeps = self.data_infos[curr_index]['lidar_sweeps'][::-1]
-            if curr_sweeps[0]['timestamp'] == last_timestamp:
+            if curr_sweeps and curr_sweeps[0]['timestamp'] == last_timestamp:
                 curr_sweeps = curr_sweeps[1:]
+            if not curr_sweeps:
+                curr_index = curr_index + 1
+                continue
             all_sweeps_next.extend(curr_sweeps)
             curr_index = curr_index + 1
             last_timestamp = all_sweeps_next[-1]['timestamp']
@@ -106,10 +108,11 @@ class NuScenesOccupancyDataset(BaseDataset):
         ego2global_rotation = info['ego2global_rotation']
         lidar2ego_translation = info['lidar2ego_translation']
         lidar2ego_rotation = info['lidar2ego_rotation']
-        ego2global_rotation_mat = Quaternion(ego2global_rotation).rotation_matrix
-        lidar2ego_rotation_mat = Quaternion(lidar2ego_rotation).rotation_matrix
+
+        ego2global_rotation_mat = quaternion_to_matrix(ego2global_rotation)
+        lidar2ego_rotation_mat = quaternion_to_matrix(lidar2ego_rotation)
         ego2lidar = transform_matrix(
-            lidar2ego_translation, Quaternion(lidar2ego_rotation), inverse=True)
+            lidar2ego_translation, lidar2ego_rotation, inverse=True)
 
         input_dict = dict(
             sample_token=info['token'],
@@ -137,6 +140,7 @@ class NuScenesOccupancyDataset(BaseDataset):
             img_paths = []
             img_timestamps = []
             ego2img = []
+            cam_types = list(info['cams'].keys())
 
             for _, cam_info in info['cams'].items():
                 img_paths.append(os.path.relpath(cam_info['data_path']))
@@ -158,6 +162,8 @@ class NuScenesOccupancyDataset(BaseDataset):
                 img_timestamp=img_timestamps,
                 ego2img=ego2img,
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
+                cam_types=cam_types,
+                num_views=len(cam_types),
             ))
 
         if not self.test_mode:
@@ -166,51 +172,40 @@ class NuScenesOccupancyDataset(BaseDataset):
 
         input_dict['sample_idx'] = index
         return input_dict
-    
+
+    def _build_metric(self, eval_kwargs):
+        from .metrics.occ3d_metric import OccupancyMetric
+
+        occupancy_cfg = self.dataset_cfg.get('occupancy_io', {})
+
+        return OccupancyMetric(
+            ann_file=self.ann_file,
+            occ_root=eval_kwargs.get('occ_root', self.occ_root or osp.join(self.data_root, 'openoccupancy')),
+            empty_label=eval_kwargs.get('empty_label', self.dataset_cfg.get('empty_label', 16)),
+            occ_path_template=eval_kwargs.get(
+                'occ_path_template', occupancy_cfg.get('path_template', 'scene_{scene_token}/occupancy/{lidar_token}.npy')),
+            src_class_names=eval_kwargs.get(
+                'src_class_names', occupancy_cfg.get('src_class_names', None)),
+            ignore_class_names=eval_kwargs.get(
+                'ignore_class_names', occupancy_cfg.get('ignore_class_names', ['noise'])),
+            class_names=eval_kwargs.get('class_names', self.dataset_cfg.get('class_names', None)),
+            pc_range=eval_kwargs.get('pc_range', self.dataset_cfg.get('pc_range', None)),
+            voxel_size=eval_kwargs.get('voxel_size', self.dataset_cfg.get('voxel_size', None)),
+        )
+
     def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
-        occ_gts = []
-        occ_preds = []
-        lidar_origins = []
-
-        print('\nStarting Evaluation...')
-        metric = Metric_mIoU_Occupancy()
-
-        occ_class_names = [
-            'noise', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade', 'vegetation'
+        warnings.warn(
+            'NuScenesOccupancyDataset.evaluate is deprecated; please use mmengine evaluators '
+            '(OccupancyMetric) via val_evaluator/test_evaluator.',
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        metric = self._build_metric(eval_kwargs)
+        packed_results = [
+            dict(pred=pred, sample_idx=i)
+            for i, pred in enumerate(occ_results)
         ]
-        ignore_class_names=['noise']
-        pc_range = np.array([-51.2, -51.2, -5.0, 51.2, 51.2, 3])
-        voxel_size = np.array([0.2, 0.2, 0.2])
-        voxel_num = ((pc_range[3:] - pc_range[:3]) / voxel_size).astype(np.int64)
-
-        from tqdm import tqdm
-        for i in tqdm(range(len(occ_results))):
-            result_dict = occ_results[i]
-            info = self.get_data_info(i)
-
-            scene_token, lidar_token = info['scene_token'], info['lidar_token']
-            occ_root = self.occ_root or osp.join(self.data_root, 'openoccupancy')
-            occ_file = osp.join(occ_root, f'scene_{scene_token}', 'occupancy', f'{lidar_token}.npy')
-            # load lidar and camera visible label
-            occ_labels = np.load(occ_file)
-            coors, labels = occ_labels[:, :3], occ_labels[:, 3]
-            occ_labels, _ = sparse2dense(coors[:, ::-1], labels, voxel_num, empty_value=len(occ_class_names))
-            mask = occ_labels != 0 # ignore noise
-
-            curr_class_names = [n for n in occ_class_names if n not in ignore_class_names]
-            curr_bg_class_idx = len(curr_class_names) # 16
-            label_mapper = [curr_class_names.index(n) if n in curr_class_names else 16
-                            for n in occ_class_names] + [curr_bg_class_idx]
-            label_mapper = np.array(label_mapper)
-            occ_labels = label_mapper[occ_labels]
-
-            occ_pred, _ = sparse2dense(result_dict['occ_loc'], result_dict['sem_pred'], voxel_num, 16)
-            metric.add_batch(occ_pred, occ_labels, mask)
-
-        mIoU, IoU = metric.count_miou()
-        return {'mIoU': mIoU, 'IoU': IoU}
+        return metric.compute_metrics(packed_results)
 
     def format_results(self, occ_results, submission_prefix, **kwargs):
         if submission_prefix is not None:
@@ -219,6 +214,6 @@ class NuScenesOccupancyDataset(BaseDataset):
         for index, occ_pred in enumerate(tqdm(occ_results)):
             info = self.data_infos[index]
             sample_token = info['token']
-            save_path=os.path.join(submission_prefix, '{}.npz'.format(sample_token))
-            np.savez_compressed(save_path,occ_pred.astype(np.uint8))
+            save_path = os.path.join(submission_prefix, f'{sample_token}.npz')
+            np.savez_compressed(save_path, occ_pred.astype(np.uint8))
         print('\nFinished.')

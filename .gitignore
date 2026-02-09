@@ -53,3 +53,5 @@ visualizations
 
 mmcv
 demo_outputs
+train_field_clouds
+tests

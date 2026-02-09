@@ -165,7 +165,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         if self.training and self.stop_prev_grad > 0:
             H, W = input_shape
-            img = img.reshape(B, -1, 6, C, H, W)
+            num_views = self._get_num_views()
+            img = img.reshape(B, -1, num_views, C, H, W)
 
             img_grad = img[:, :self.stop_prev_grad]
             img_nograd = img[:, self.stop_prev_grad:]
@@ -181,7 +182,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             img_feats = []
             for lvl in range(len(all_img_feats[0])):
                 C, H, W = all_img_feats[0][lvl].shape[1:]
-                img_feat = torch.cat([feat[lvl].reshape(B, -1, 6, C, H, W) for feat in all_img_feats], dim=1)
+                img_feat = torch.cat([feat[lvl].reshape(B, -1, num_views, C, H, W) for feat in all_img_feats], dim=1)
                 img_feat = img_feat.reshape(-1, C, H, W)
                 img_feats.append(img_feat)
         else:
@@ -314,9 +315,24 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         points = [points] if points is None else points
         return self.simple_test(img_metas[0], img[0], points[0], **kwargs)
 
+    def _get_num_views(self):
+        transformer = getattr(self.pts_bbox_head, 'transformer', None)
+        if transformer is not None and hasattr(transformer, 'num_views'):
+            return int(transformer.num_views)
+        return 6
+
+    def _can_use_online_test(self, img_metas, img):
+        if get_dist_info()[1] != 1:
+            return False
+        if not isinstance(img_metas, list) or len(img_metas) != 1:
+            return False
+        if not isinstance(img, torch.Tensor) or img.dim() != 5:
+            return False
+        num_views = self._get_num_views()
+        return num_views > 0 and img.shape[1] % num_views == 0
+
     def simple_test(self, img_metas, img=None, points=None, rescale=False):
-        world_size = get_dist_info()[1]
-        if world_size == 1 and len(img_metas) == 1:  # online
+        if self._can_use_online_test(img_metas, img):
             return self.simple_test_online(img_metas, img, points, rescale)
         return self.simple_test_offline(img_metas, img, points, rescale)
 
@@ -350,10 +366,11 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         assert len(img_metas) == 1  # batch_size = 1
 
         B, N, C, H, W = img.shape
-        img = img.reshape(B, N//6, 6, C, H, W)
+        num_views = self._get_num_views()
+        img = img.reshape(B, N // num_views, num_views, C, H, W)
 
         img_filenames = img_metas[0]['filename']
-        num_frames = len(img_filenames) // 6
+        num_frames = len(img_filenames) // num_views
         # assert num_frames == img.shape[1]
 
         img_shape = (H, W, C)
@@ -365,12 +382,12 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         # extract feature frame by frame
         for i in range(num_frames):
-            img_indices = list(np.arange(i * 6, (i + 1) * 6))
+            img_indices = list(np.arange(i * num_views, (i + 1) * num_views))
 
             img_metas_curr = [{}]
             for k in img_metas[0].keys():
                 item = img_metas[0][k]
-                if isinstance(item, list) and (len(item) == 6 * num_frames):
+                if isinstance(item, list) and (len(item) == num_views * num_frames):
                     img_metas_curr[0][k] = [item[j] for j in img_indices]
                 else:
                     img_metas_curr[0][k] = item

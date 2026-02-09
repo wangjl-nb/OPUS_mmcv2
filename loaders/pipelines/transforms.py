@@ -346,8 +346,9 @@ class RandomTransformImage:
 @TRANSFORMS.register_module()
 class RandomTransformOcc:
 
-    def __init__(self, bda_aug_conf):
+    def __init__(self, bda_aug_conf, empty_label=17):
         self.bda_aug_conf = bda_aug_conf
+        self.empty_label = int(empty_label)
 
     def sample_bda_augmentation(self):
         """Generate bda augmentation values based on bda_config."""
@@ -400,7 +401,7 @@ class RandomTransformOcc:
         mask_lidar = results['mask_lidar']
         mask_camera = results['mask_camera']
         if rotate_bda != 0 or scale_bda != 1.0:
-            semantics = self.affine(semantics, rotate_bda, scale_bda, fill=17)
+            semantics = self.affine(semantics, rotate_bda, scale_bda, fill=self.empty_label)
             mask_lidar = self.affine(mask_lidar, rotate_bda, scale_bda, fill=False)
             mask_camera = self.affine(mask_camera, rotate_bda, scale_bda, fill=False)
         if flip_dx:

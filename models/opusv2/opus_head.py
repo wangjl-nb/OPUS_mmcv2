@@ -399,7 +399,7 @@ class OPUSV2Head(BaseModule):
 
         xx = x[:, None, None].expand(W, H, Z)
         yy = y[None, :, None].expand(W, H, Z)
-        zz = z[None, None, :].expand(W, W, Z)
+        zz = z[None, None, :].expand(W, H, Z)
         coors = torch.stack([xx, yy, zz], dim=-1) # actual space
 
         gt_points, gt_masks, gt_labels = [], [], []

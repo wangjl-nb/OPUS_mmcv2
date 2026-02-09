@@ -3,7 +3,7 @@ import numpy as np
 from mmengine.dataset import BaseDataset
 from mmengine.fileio import load
 from mmdet3d.registry import DATASETS
-from pyquaternion import Quaternion
+from .geometry import quaternion_to_matrix
 
 
 @DATASETS.register_module()
@@ -71,8 +71,8 @@ class CustomNuScenesDataset(BaseDataset):
         ego2global_rotation = info['ego2global_rotation']
         lidar2ego_translation = info['lidar2ego_translation']
         lidar2ego_rotation = info['lidar2ego_rotation']
-        ego2global_rotation = Quaternion(ego2global_rotation).rotation_matrix
-        lidar2ego_rotation = Quaternion(lidar2ego_rotation).rotation_matrix
+        ego2global_rotation = quaternion_to_matrix(ego2global_rotation)
+        lidar2ego_rotation = quaternion_to_matrix(lidar2ego_rotation)
 
         input_dict = dict(
             sample_idx=info['token'],

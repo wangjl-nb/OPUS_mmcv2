@@ -31,6 +31,32 @@ occ_names = [
 point_cloud_range = [-40.0, -40.0, -1.0, 40.0, 40.0, 5.4]
 voxel_size = [0.4, 0.4, 0.4]
 
+dataset_cfg = dict(
+    cam_types=['CAM_FRONT_LEFT', 'CAM_FRONT', 'CAM_FRONT_RIGHT', 'CAM_BACK_LEFT', 'CAM_BACK', 'CAM_BACK_RIGHT'],
+    num_views=input_modality.get('num_cams', 6),
+    occ_io=dict(
+        path_template='{scene_name}/{token}/labels.npz',
+        semantics_key='semantics',
+        mask_camera_key='mask_camera',
+        mask_lidar_key='mask_lidar',
+    ),
+    class_names=occ_names + ['free'],
+    empty_label=len(occ_names),
+    pc_range=point_cloud_range,
+    voxel_size=voxel_size,
+    ray=dict(
+        num_workers=8,
+        max_origins=8,
+        origin_xy_bound=39.0,
+        lidar=dict(
+            mode='nuscenes_default',
+            azimuth_step_deg=1.0,
+            pitch_angles=None,
+        ),
+    ),
+)
+
+
 # arch config
 embed_dims = 256
 num_layers = 6
@@ -84,6 +110,7 @@ model = dict(
             type='OPUSV1Transformer',
             embed_dims=embed_dims,
             num_frames=num_frames,
+            num_views=dataset_cfg['num_views'],
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
@@ -124,9 +151,9 @@ ida_aug_conf = {
 
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1),
+    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, cam_types=dataset_cfg['cam_types']),
     dict(type='LoadAnnotations3D', with_bbox_3d=True, with_label_3d=True, with_attr_label=False),
-    dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
+    dict(type='LoadOcc3DFromFile', occ_root=occ_root, path_template=dataset_cfg['occ_io']['path_template'], semantics_key=dataset_cfg['occ_io']['semantics_key'], mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'], mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'], class_names=dataset_cfg['class_names'], empty_label=dataset_cfg['empty_label']),
     dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
@@ -138,7 +165,7 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color'),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True),
+    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True, cam_types=dataset_cfg['cam_types']),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='PackOcc3DInputs', meta_keys=(
         'sample_idx', 'sample_token', 'scene_name',
@@ -161,6 +188,7 @@ train_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=False,
         use_valid_flag=True,
         box_type_3d='LiDAR'),
@@ -180,6 +208,7 @@ val_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=True,
         box_type_3d='LiDAR'),
     collate_fn=dict(type='pseudo_collate'),
@@ -198,6 +227,7 @@ test_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=True,
         box_type_3d='LiDAR'),
     collate_fn=dict(type='pseudo_collate'),
@@ -242,7 +272,16 @@ val_evaluator = dict(
     type='Occ3DMetric',
     ann_file=dataset_root + 'nuscenes_infos_val_sweep.pkl',
     occ_root=occ_root,
-    empty_label=17,
+    class_names=dataset_cfg['class_names'],
+    pc_range=dataset_cfg['pc_range'],
+    voxel_size=dataset_cfg['voxel_size'],
+    occ_path_template=dataset_cfg['occ_io']['path_template'],
+    semantics_key=dataset_cfg['occ_io']['semantics_key'],
+    mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
+    mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    ray_num_workers=dataset_cfg['ray']['num_workers'],
+    ray_cfg=dataset_cfg['ray'],
+    empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     compute_rayiou=True,
 )
@@ -250,7 +289,16 @@ test_evaluator = dict(
     type='Occ3DMetric',
     ann_file=dataset_root + 'nuscenes_infos_test_sweep.pkl',
     occ_root=occ_root,
-    empty_label=17,
+    class_names=dataset_cfg['class_names'],
+    pc_range=dataset_cfg['pc_range'],
+    voxel_size=dataset_cfg['voxel_size'],
+    occ_path_template=dataset_cfg['occ_io']['path_template'],
+    semantics_key=dataset_cfg['occ_io']['semantics_key'],
+    mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
+    mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    ray_num_workers=dataset_cfg['ray']['num_workers'],
+    ray_cfg=dataset_cfg['ray'],
+    empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     compute_rayiou=True,
 )

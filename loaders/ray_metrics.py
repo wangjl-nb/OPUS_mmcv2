@@ -65,21 +65,30 @@ def meshgrid3d(occ_size, pc_range):
     return xyz
 
 
-def generate_lidar_rays():
-    # prepare lidar ray angles
-    pitch_angles = []
-    for k in range(10):
-        angle = math.pi / 2 - math.atan(k + 1)
-        pitch_angles.append(-angle)
-    
-    # nuscenes lidar fov: [0.2107773983152201, -0.5439104895672159] (rad)
-    while pitch_angles[-1] < 0.21:
-        delta = pitch_angles[-1] - pitch_angles[-2]
-        pitch_angles.append(pitch_angles[-1] + delta)
+def generate_lidar_rays(ray_cfg=None):
+    ray_cfg = ray_cfg or {}
+    lidar_cfg = ray_cfg.get('lidar', {}) if isinstance(ray_cfg, dict) else {}
+
+    pitch_angles = lidar_cfg.get('pitch_angles', None)
+    if pitch_angles is None:
+        pitch_angles = []
+        for k in range(10):
+            angle = math.pi / 2 - math.atan(k + 1)
+            pitch_angles.append(-angle)
+
+        # Keep historical nuScenes default profile when not overridden.
+        while pitch_angles[-1] < 0.21:
+            delta = pitch_angles[-1] - pitch_angles[-2]
+            pitch_angles.append(pitch_angles[-1] + delta)
+    else:
+        pitch_angles = [float(v) for v in pitch_angles]
+
+    azimuth_step_deg = float(lidar_cfg.get('azimuth_step_deg', 1.0))
+    azimuth_values = np.arange(0, 360, azimuth_step_deg)
 
     lidar_rays = []
     for pitch_angle in pitch_angles:
-        for azimuth_angle in np.arange(0, 360, 1):
+        for azimuth_angle in azimuth_values:
             azimuth_angle = np.deg2rad(azimuth_angle)
 
             x = np.cos(pitch_angle) * np.cos(azimuth_angle)
@@ -185,11 +194,11 @@ def calc_metrics(pcd_pred_list, pcd_gt_list):
     return iou_list
 
 
-def main(sem_pred_list, sem_gt_list, lidar_origin_list):
+def main(sem_pred_list, sem_gt_list, lidar_origin_list, ray_cfg=None):
     torch.cuda.empty_cache()
 
     # generate lidar rays
-    lidar_rays = generate_lidar_rays()
+    lidar_rays = generate_lidar_rays(ray_cfg=ray_cfg)
     lidar_rays = torch.from_numpy(lidar_rays)
 
     pcd_pred_list, pcd_gt_list = [], []
@@ -372,7 +381,8 @@ def main_custom(sem_pred_list,
                 pc_range=None,
                 voxel_size=None,
                 class_names=None,
-                empty_label=None):
+                empty_label=None,
+                ray_cfg=None):
     torch.cuda.empty_cache()
 
     if pc_range is None:
@@ -384,7 +394,7 @@ def main_custom(sem_pred_list,
         class_names=class_names,
         empty_label=empty_label)
 
-    lidar_rays = generate_lidar_rays()
+    lidar_rays = generate_lidar_rays(ray_cfg=ray_cfg)
     lidar_rays = torch.from_numpy(lidar_rays)
 
     pcd_pred_list, pcd_gt_list = [], []

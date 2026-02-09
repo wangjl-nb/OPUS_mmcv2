@@ -15,10 +15,74 @@ except Exception:  # pragma: no cover
 from mmdet3d.registry import TRANSFORMS
 from ..utils import compose_ego2img
 
-cam_types = [
-            'CAM_LEFT', 'CAM_BACK', 'CAM_FRONT',
-            'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'
-        ]
+DEFAULT_CAM_TYPES = [
+    'CAM_LEFT', 'CAM_BACK', 'CAM_FRONT',
+    'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'
+]
+
+DEFAULT_OCC3D_CLASS_NAMES = [
+    'others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+    'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+    'driveable_surface', 'other_flat', 'sidewalk',
+    'terrain', 'manmade', 'vegetation', 'free'
+]
+
+DEFAULT_OCCUPANCY_CLASS_NAMES = [
+    'noise', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
+    'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
+    'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade',
+    'vegetation'
+]
+
+
+def _infer_cam_types_from_sweeps(sweeps):
+    for sweep in sweeps:
+        if isinstance(sweep, dict) and sweep:
+            return list(sweep.keys())
+    return []
+
+
+def _resolve_cam_types(results, configured_cam_types=None):
+    if 'cam_types' in results and results['cam_types']:
+        return list(results['cam_types'])
+
+    if configured_cam_types:
+        return list(configured_cam_types)
+
+    cam_sweeps = results.get('cam_sweeps', {})
+    if isinstance(cam_sweeps, dict):
+        inferred = _infer_cam_types_from_sweeps(cam_sweeps.get('prev', []))
+        if inferred:
+            return inferred
+        inferred = _infer_cam_types_from_sweeps(cam_sweeps.get('next', []))
+        if inferred:
+            return inferred
+
+    sweeps = results.get('sweeps', {})
+    if isinstance(sweeps, dict):
+        inferred = _infer_cam_types_from_sweeps(sweeps.get('prev', []))
+        if inferred:
+            return inferred
+        inferred = _infer_cam_types_from_sweeps(sweeps.get('next', []))
+        if inferred:
+            return inferred
+
+    num_views = results.get('num_views', None)
+    if num_views is None and isinstance(results.get('img', None), list):
+        num_views = len(results['img'])
+    if num_views is not None:
+        return [f'CAM_{i}' for i in range(int(num_views))]
+    return list(DEFAULT_CAM_TYPES)
+
+
+def _resolve_num_views(results, cam_types):
+    if cam_types:
+        return int(len(cam_types))
+    if 'num_views' in results and results['num_views'] is not None:
+        return int(results['num_views'])
+    if isinstance(results.get('img', None), list) and results['img']:
+        return int(len(results['img']))
+    return int(len(DEFAULT_CAM_TYPES))
 
 
 @TRANSFORMS.register_module(force=True)
@@ -47,7 +111,8 @@ class LoadMultiViewImageFromFiles:
         if self.num_ref_frames <= 0:
             return results
         init_choice = np.array([0], dtype=np.int64)
-        num_frames = len(results['img_filename']) // self.num_views - 1
+        num_views = int(results.get('num_views', self.num_views) or self.num_views)
+        num_frames = len(results['img_filename']) // num_views - 1
         if num_frames == 0:
             choices = np.random.choice(1, self.num_ref_frames, replace=True)
         elif num_frames >= self.num_ref_frames:
@@ -68,14 +133,14 @@ class LoadMultiViewImageFromFiles:
         choices = np.concatenate([init_choice, choices])
         select_filename = []
         for choice in choices:
-            select_filename += results['img_filename'][choice * self.num_views:
-                                                       (choice + 1) * self.num_views]
+            select_filename += results['img_filename'][choice * num_views:
+                                                       (choice + 1) * num_views]
         results['img_filename'] = select_filename
         for key in ['cam2img', 'lidar2cam']:
             if key in results:
                 select_results = []
                 for choice in choices:
-                    select_results += results[key][choice * self.num_views:(choice + 1) * self.num_views]
+                    select_results += results[key][choice * num_views:(choice + 1) * num_views]
                 results[key] = select_results
         for key in ['ego2global']:
             if key in results:
@@ -93,8 +158,8 @@ class LoadMultiViewImageFromFiles:
                     cur_ego2global = results['ego2global'][0]
                     pad_cur_ego2global[:cur_ego2global.shape[0], :cur_ego2global.shape[1]] = cur_ego2global
                     cur2prev = np.linalg.inv(pad_prev_ego2global).dot(pad_cur_ego2global)
-                    for result_idx in range(choice_idx * self.num_views,
-                                            (choice_idx + 1) * self.num_views):
+                    for result_idx in range(choice_idx * num_views,
+                                            (choice_idx + 1) * num_views):
                         results[key][result_idx] = results[key][result_idx].dot(cur2prev)
         return results
 
@@ -147,7 +212,10 @@ class LoadMultiViewImageFromFiles:
             mean=np.zeros(num_channels, dtype=np.float32),
             std=np.ones(num_channels, dtype=np.float32),
             to_rgb=False)
-        results['num_views'] = self.num_views
+        num_views = results.get('num_views', None)
+        if num_views is None or int(num_views) <= 0:
+            num_views = len(results['img']) if self.num_ref_frames <= 0 else self.num_views
+        results['num_views'] = int(num_views)
         results['num_ref_frames'] = self.num_ref_frames
         return results
 
@@ -165,68 +233,99 @@ class LoadMultiViewImageFromFiles:
 @TRANSFORMS.register_module()
 class LoadOcc3DFromFile:
 
-    def __init__(self, occ_root, ignore_class_names=[]):
+    def __init__(self,
+                 occ_root,
+                 ignore_class_names=None,
+                 path_template='{scene_name}/{token}/labels.npz',
+                 semantics_key='semantics',
+                 mask_camera_key='mask_camera',
+                 mask_lidar_key='mask_lidar',
+                 class_names=None,
+                 empty_label=None):
         self.occ_root = occ_root
-        self.ignore_class_names = ignore_class_names
-        self.occ_class_names = [
-            'others', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-            'driveable_surface', 'other_flat', 'sidewalk',
-            'terrain', 'manmade', 'vegetation', 'free'
-        ]
+        self.ignore_class_names = ignore_class_names or []
+        self.path_template = path_template
+        self.semantics_key = semantics_key
+        self.mask_camera_key = mask_camera_key
+        self.mask_lidar_key = mask_lidar_key
+        self.occ_class_names = class_names or list(DEFAULT_OCC3D_CLASS_NAMES)
+        self.empty_label = len(self.occ_class_names) - 1 if empty_label is None else int(empty_label)
+
+    def _build_occ_path(self, results):
+        fmt = dict(results)
+        if 'sample_token' in results:
+            fmt.setdefault('token', results['sample_token'])
+        if 'token' in results:
+            fmt.setdefault('sample_token', results['token'])
+        return osp.join(self.occ_root, self.path_template.format(**fmt))
 
     def __call__(self, results):
-        scene_name, sample_token = results['scene_name'], results['sample_token']
-        occ_file = osp.join(self.occ_root, scene_name, sample_token, 'labels.npz')
-        # load lidar and camera visible label
+        occ_file = self._build_occ_path(results)
         occ_labels = np.load(occ_file)
-        mask_lidar = occ_labels['mask_lidar'].astype(np.bool_)  # [200, 200, 16]
-        mask_camera = occ_labels['mask_camera'].astype(np.bool_)  # [200, 200, 16]
+
+        semantics = np.array(occ_labels[self.semantics_key], copy=True)
+        mask_shape = semantics.shape
+        mask_lidar = occ_labels[self.mask_lidar_key].astype(np.bool_)             if self.mask_lidar_key in occ_labels else np.ones(mask_shape, dtype=np.bool_)
+        mask_camera = occ_labels[self.mask_camera_key].astype(np.bool_)             if self.mask_camera_key in occ_labels else np.ones(mask_shape, dtype=np.bool_)
+
         results['mask_lidar'] = mask_lidar
         results['mask_camera'] = mask_camera
 
-        semantics = occ_labels['semantics']  # [200, 200, 16]
-        for class_id in range(len(self.occ_class_names) - 1):
-            mask = semantics == class_id
-            if mask.sum() == 0:
-                continue
-            if self.occ_class_names[class_id] in self.ignore_class_names:
-                semantics[mask] = self.num_classes - 1
-        results['voxel_semantics'] = semantics
+        if self.ignore_class_names:
+            for class_id, class_name in enumerate(self.occ_class_names):
+                if class_id == self.empty_label:
+                    continue
+                if class_name not in self.ignore_class_names:
+                    continue
+                semantics[semantics == class_id] = self.empty_label
+
+        results['voxel_semantics'] = np.ascontiguousarray(semantics)
         return results
 
 
 @TRANSFORMS.register_module()
 class LoadOccupancyFromFile:
 
-    def __init__(self, occ_root, ignore_class_names=['noise']):
+    def __init__(self,
+                 occ_root,
+                 ignore_class_names=None,
+                 path_template='scene_{scene_token}/occupancy/{lidar_token}.npy',
+                 pc_range=None,
+                 voxel_size=None,
+                 src_class_names=None):
         self.occ_root = occ_root
-        self.ignore_class_names = ignore_class_names
-        self.pc_range = np.array([-51.2, -51.2, -5.0, 51.2, 51.2, 3])
-        self.voxel_size = np.array([0.2, 0.2, 0.2])
-        self.occ_class_names = [
-            'noise', 'barrier', 'bicycle', 'bus', 'car', 'construction_vehicle',
-            'motorcycle', 'pedestrian', 'traffic_cone', 'trailer', 'truck',
-            'driveable_surface', 'other_flat', 'sidewalk', 'terrain', 'manmade', 'vegetation'
-        ]
-    
+        self.ignore_class_names = ignore_class_names or ['noise']
+        self.path_template = path_template
+        self.pc_range = np.array(pc_range if pc_range is not None else [-51.2, -51.2, -5.0, 51.2, 51.2, 3])
+        self.voxel_size = np.array(voxel_size if voxel_size is not None else [0.2, 0.2, 0.2])
+        self.occ_class_names = src_class_names or list(DEFAULT_OCCUPANCY_CLASS_NAMES)
+
+    def _build_occ_path(self, results):
+        fmt = dict(results)
+        if 'sample_token' in results:
+            fmt.setdefault('token', results['sample_token'])
+        if 'token' in results:
+            fmt.setdefault('sample_token', results['token'])
+        return osp.join(self.occ_root, self.path_template.format(**fmt))
+
     def __call__(self, results):
-        scene_token, lidar_token = results['scene_token'], results['lidar_token']
-        occ_file = osp.join(self.occ_root, f'scene_{scene_token}', 'occupancy', f'{lidar_token}.npy')
-        # load lidar and camera visible label
+        occ_file = self._build_occ_path(results)
         occ_labels = np.load(occ_file)
-        coors, labels = occ_labels[:, :3], occ_labels[:, 3]
+        coors, labels = occ_labels[:, :3], occ_labels[:, 3].astype(np.int64)
 
         curr_class_names = [n for n in self.occ_class_names if n not in self.ignore_class_names]
-        empty_labels = len(curr_class_names)
-        label_mapper = [curr_class_names.index(n) if n in curr_class_names else empty_labels
-                        for n in self.occ_class_names]
-        label_mapper = np.array(label_mapper)
+        empty_label = len(curr_class_names)
+
+        class_to_idx = {name: idx for idx, name in enumerate(curr_class_names)}
+        label_mapper = np.full(len(self.occ_class_names), empty_label, dtype=np.int64)
+        for idx, name in enumerate(self.occ_class_names):
+            if name in class_to_idx:
+                label_mapper[idx] = class_to_idx[name]
         labels = label_mapper[labels]
 
         scene_size = self.pc_range[3:] - self.pc_range[:3]
         voxel_num = (scene_size / self.voxel_size).astype(np.int64)
-        semantics = np.full(voxel_num, empty_labels, dtype=np.uint8)
+        semantics = np.full(voxel_num, empty_label, dtype=np.uint8)
         semantics[coors[:, 2], coors[:, 1], coors[:, 0]] = labels
         results['voxel_semantics'] = np.ascontiguousarray(semantics)
         return results
@@ -241,23 +340,39 @@ class LoadMultiViewImageFromMultiSweeps:
                  train_interval=[4, 8],
                  test_interval=6,
                  force_offline=False,
-                 imdecode_backend = 'turbojpeg'
-                 ):
+                 cam_types=None,
+                 imdecode_backend='turbojpeg'):
         self.sweeps_num = sweeps_num
         self.color_type = color_type
         self.test_mode = test_mode
         self.force_offline = force_offline
+        self.cam_types = list(cam_types) if cam_types is not None else None
 
         self.train_interval = train_interval
         self.test_interval = test_interval
 
         mmcv.use_backend(imdecode_backend)
 
+    def _get_cam_types(self, results):
+        return _resolve_cam_types(results, self.cam_types)
+
+    def _pick_sweep(self, sweeps, idx, cam_types):
+        sweep_idx = min(idx, len(sweeps) - 1)
+        sweep = sweeps[sweep_idx]
+        if len(sweep.keys()) < len(cam_types) and sweep_idx > 0:
+            sweep = sweeps[sweep_idx - 1]
+        sensors = [sensor for sensor in cam_types if sensor in sweep]
+        if not sensors:
+            sensors = list(sweep.keys())
+        return sweep, sensors
+
     def load_offline(self, results):
+        cam_types = self._get_cam_types(results)
+        num_views = _resolve_num_views(results, cam_types)
 
         if len(results['cam_sweeps']['prev']) == 0:
             for _ in range(self.sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results['img'].append(results['img'][j])
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
@@ -268,8 +383,8 @@ class LoadMultiViewImageFromMultiSweeps:
                 choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
             elif len(results['cam_sweeps']['prev']) <= self.sweeps_num:
                 pad_len = self.sweeps_num - len(results['cam_sweeps']['prev'])
-                choices = list(range(len(results['cam_sweeps']['prev']))) + \
-                    [len(results['cam_sweeps']['prev']) - 1] * pad_len
+                choices = list(range(len(results['cam_sweeps']['prev']))) + [
+                    len(results['cam_sweeps']['prev']) - 1] * pad_len
             else:
                 max_interval = len(results['cam_sweeps']['prev']) // self.sweeps_num
                 max_interval = min(max_interval, self.train_interval[1])
@@ -278,13 +393,8 @@ class LoadMultiViewImageFromMultiSweeps:
                 choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
 
             for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
-                sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
+                sweep, sensors = self._pick_sweep(results['cam_sweeps']['prev'], idx, cam_types)
+                for sensor in sensors:
                     results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
@@ -299,15 +409,14 @@ class LoadMultiViewImageFromMultiSweeps:
         return results
 
     def load_online(self, results):
-        # only used when measuring FPS
         assert self.test_mode
-        assert self.test_interval % 6 == 0
 
-        
+        cam_types = self._get_cam_types(results)
+        num_views = _resolve_num_views(results, cam_types)
 
         if len(results['cam_sweeps']['prev']) == 0:
             for _ in range(self.sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
                     results['ego2img'].append(np.copy(results['ego2img'][j]))
@@ -316,14 +425,8 @@ class LoadMultiViewImageFromMultiSweeps:
             choices = [(k + 1) * interval - 1 for k in range(self.sweeps_num)]
 
             for idx in sorted(list(choices)):
-                sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
-                sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
-                    sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
-                    # skip loading history frames
+                sweep, sensors = self._pick_sweep(results['cam_sweeps']['prev'], idx, cam_types)
+                for sensor in sensors:
                     results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
                     results['ego2img'].append(compose_ego2img(
@@ -343,8 +446,7 @@ class LoadMultiViewImageFromMultiSweeps:
         world_size = get_dist_info()[1]
         if world_size == 1 and self.test_mode and (not self.force_offline):
             return self.load_online(results)
-        else:
-            return self.load_offline(results)
+        return self.load_offline(results)
 
 
 @TRANSFORMS.register_module()
@@ -353,11 +455,13 @@ class LoadMultiViewImageFromMultiSweepsFuture:
                  prev_sweeps_num=5,
                  next_sweeps_num=5,
                  color_type='color',
-                 test_mode=False):
+                 test_mode=False,
+                 cam_types=None):
         self.prev_sweeps_num = prev_sweeps_num
         self.next_sweeps_num = next_sweeps_num
         self.color_type = color_type
         self.test_mode = test_mode
+        self.cam_types = list(cam_types) if cam_types is not None else None
 
         assert prev_sweeps_num == next_sweeps_num
 
@@ -373,30 +477,30 @@ class LoadMultiViewImageFromMultiSweepsFuture:
         if self.prev_sweeps_num == 0 and self.next_sweeps_num == 0:
             return results
 
+        cam_types = _resolve_cam_types(results, self.cam_types)
+        num_views = _resolve_num_views(results, cam_types)
+
         if self.test_mode:
             interval = self.test_interval
         else:
             interval = np.random.randint(self.train_interval[0], self.train_interval[1] + 1)
 
-        # previous sweeps
         if len(results['cam_sweeps']['prev']) == 0:
             for _ in range(self.prev_sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results['img'].append(results['img'][j])
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
                     results['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
             choices = [(k + 1) * interval - 1 for k in range(self.prev_sweeps_num)]
-
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['cam_sweeps']['prev']) - 1)
                 sweep = results['cam_sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
+                if len(sweep.keys()) < len(cam_types) and sweep_idx > 0:
                     sweep = results['cam_sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
+                sensors = [sensor for sensor in cam_types if sensor in sweep] or list(sweep.keys())
+                for sensor in sensors:
                     results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results['filename'].append(sweep[sensor]['data_path'])
@@ -408,25 +512,22 @@ class LoadMultiViewImageFromMultiSweepsFuture:
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
-        # future sweeps
         if len(results['cam_sweeps']['next']) == 0:
             for _ in range(self.next_sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results['img'].append(results['img'][j])
                     results['img_timestamp'].append(results['img_timestamp'][j])
                     results['filename'].append(results['filename'][j])
                     results['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
             choices = [(k + 1) * interval - 1 for k in range(self.next_sweeps_num)]
-
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['cam_sweeps']['next']) - 1)
                 sweep = results['cam_sweeps']['next'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
+                if len(sweep.keys()) < len(cam_types) and sweep_idx > 0:
                     sweep = results['cam_sweeps']['next'][sweep_idx - 1]
-
-                for sensor in cam_types:
+                sensors = [sensor for sensor in cam_types if sensor in sweep] or list(sweep.keys())
+                for sensor in sensors:
                     results['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results['filename'].append(sweep[sensor]['data_path'])
@@ -442,7 +543,7 @@ class LoadMultiViewImageFromMultiSweepsFuture:
 
 
 '''
-This func loads previous and future frames in interleaved order, 
+This func loads previous and future frames in interleaved order,
 e.g. curr, prev1, next1, prev2, next2, prev3, next3...
 '''
 @TRANSFORMS.register_module()
@@ -451,11 +552,13 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                  prev_sweeps_num=5,
                  next_sweeps_num=5,
                  color_type='color',
-                 test_mode=False):
+                 test_mode=False,
+                 cam_types=None):
         self.prev_sweeps_num = prev_sweeps_num
         self.next_sweeps_num = next_sweeps_num
         self.color_type = color_type
         self.test_mode = test_mode
+        self.cam_types = list(cam_types) if cam_types is not None else None
 
         assert prev_sweeps_num == next_sweeps_num
 
@@ -471,48 +574,37 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
         if self.prev_sweeps_num == 0 and self.next_sweeps_num == 0:
             return results
 
-        
+        cam_types = _resolve_cam_types(results, self.cam_types)
+        num_views = _resolve_num_views(results, cam_types)
 
         if self.test_mode:
             interval = self.test_interval
         else:
             interval = np.random.randint(self.train_interval[0], self.train_interval[1] + 1)
 
-        results_prev = dict(
-            img=[],
-            img_timestamp=[],
-            filename=[],
-            ego2img=[],
-        )
-        results_next = dict(
-            img=[],
-            img_timestamp=[],
-            filename=[],
-            ego2img=[],
-        )
+        results_prev = dict(img=[], img_timestamp=[], filename=[], ego2img=[])
+        results_next = dict(img=[], img_timestamp=[], filename=[], ego2img=[])
 
         if len(results['sweeps']['prev']) == 0:
             for _ in range(self.prev_sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results_prev['img'].append(results['img'][j])
                     results_prev['img_timestamp'].append(results['img_timestamp'][j])
                     results_prev['filename'].append(results['filename'][j])
                     results_prev['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
             choices = [(k + 1) * interval - 1 for k in range(self.prev_sweeps_num)]
-
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['sweeps']['prev']) - 1)
                 sweep = results['sweeps']['prev'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
+                if len(sweep.keys()) < len(cam_types) and sweep_idx > 0:
                     sweep = results['sweeps']['prev'][sweep_idx - 1]
-
-                for sensor in cam_types:
+                sensors = [sensor for sensor in cam_types if sensor in sweep] or list(sweep.keys())
+                for sensor in sensors:
                     results_prev['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results_prev['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results_prev['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
+                    results_prev['ego2img'].append(compose_ego2img(
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
@@ -521,28 +613,25 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                     ))
 
         if len(results['sweeps']['next']) == 0:
-            print(1, len(results_next['img']) )
             for _ in range(self.next_sweeps_num):
-                for j in range(len(cam_types)):
+                for j in range(num_views):
                     results_next['img'].append(results['img'][j])
                     results_next['img_timestamp'].append(results['img_timestamp'][j])
                     results_next['filename'].append(results['filename'][j])
                     results_next['ego2img'].append(np.copy(results['ego2img'][j]))
         else:
             choices = [(k + 1) * interval - 1 for k in range(self.next_sweeps_num)]
-
             for idx in sorted(list(choices)):
                 sweep_idx = min(idx, len(results['sweeps']['next']) - 1)
                 sweep = results['sweeps']['next'][sweep_idx]
-
-                if len(sweep.keys()) < len(cam_types):
+                if len(sweep.keys()) < len(cam_types) and sweep_idx > 0:
                     sweep = results['sweeps']['next'][sweep_idx - 1]
-
-                for sensor in cam_types:
+                sensors = [sensor for sensor in cam_types if sensor in sweep] or list(sweep.keys())
+                for sensor in sensors:
                     results_next['img'].append(mmcv.imread(sweep[sensor]['data_path'], self.color_type))
                     results_next['img_timestamp'].append(sweep[sensor]['timestamp'] / 1e6)
                     results_next['filename'].append(os.path.relpath(sweep[sensor]['data_path']))
-                    results['ego2img'].append(compose_ego2img(
+                    results_next['ego2img'].append(compose_ego2img(
                         results['ego2global_translation'],
                         results['ego2global_rotation'],
                         sweep[sensor]['sensor2global_translation'],
@@ -550,21 +639,21 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                         sweep[sensor]['cam_intrinsic'],
                     ))
 
-        assert len(results_prev['img']) % 6 == 0
-        assert len(results_next['img']) % 6 == 0
+        assert len(results_prev['img']) % num_views == 0
+        assert len(results_next['img']) % num_views == 0
 
-        for i in range(len(results_prev['img']) // 6):
-            for j in range(6):
-                results['img'].append(results_prev['img'][i * 6 + j])
-                results['img_timestamp'].append(results_prev['img_timestamp'][i * 6 + j])
-                results['filename'].append(results_prev['filename'][i * 6 + j])
-                results['ego2img'].append(results_prev['ego2img'][i * 6 + j])
+        for i in range(len(results_prev['img']) // num_views):
+            for j in range(num_views):
+                results['img'].append(results_prev['img'][i * num_views + j])
+                results['img_timestamp'].append(results_prev['img_timestamp'][i * num_views + j])
+                results['filename'].append(results_prev['filename'][i * num_views + j])
+                results['ego2img'].append(results_prev['ego2img'][i * num_views + j])
 
-            for j in range(6):
-                results['img'].append(results_next['img'][i * 6 + j])
-                results['img_timestamp'].append(results_next['img_timestamp'][i * 6 + j])
-                results['filename'].append(results_next['filename'][i * 6 + j])
-                results['ego2img'].append(results_next['ego2img'][i * 6 + j])
+            for j in range(num_views):
+                results['img'].append(results_next['img'][i * num_views + j])
+                results['img_timestamp'].append(results_next['img_timestamp'][i * num_views + j])
+                results['filename'].append(results_next['filename'][i * num_views + j])
+                results['ego2img'].append(results_next['ego2img'][i * num_views + j])
 
         return results
 

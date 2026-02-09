@@ -19,19 +19,32 @@ object_names = [
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
-occ_names = ['others', 'bathroompartition', 'binder', 'blinds', 'book', 'bottle', 
-             'briefcase', 'building', 'cardboardbox', 'carpet', 'ceiling', 'ceilingvent', 
-             'chair', 'clipboard', 'clock', 'coffeecup', 'computerbaseunit', 'computermouse', 
-             'computermousepad', 'copier', 'cup', 'cupboard', 'desk', 'donut', 'door', 
-             'eraser', 'filecabinet', 'firealarm', 'firesprinkler', 'floor', 'goblet', 
-             'handdryer', 'headsculpture', 'jug', 'keyboard', 'lamp', 'laptop', 'light', 
-             'marker', 'microphone', 'mirror', 'monitor', 'paperstack', 'paperstand', 
-             'papertray', 'pen', 'pencil', 'pencilcontainer', 'phone', 'picture', 'pictureframe', 
-             'plant', 'printer', 'rack', 'receptiondesk', 'rollingcabinet', 'securitycamera', 
-             'sign', 'sink', 'skysphere', 'smartphone', 'smokedetector', 'soapdispenser', 'sofa', 
-             'sticker', 'table', 'tabletpc', 'toilet', 'trashcan', 'tray', 'tv', 'urinal', 'vase', 
+occ_names = ['others', 'bathroompartition', 'binder', 'blinds', 'book', 'bottle',
+             'briefcase', 'building', 'cardboardbox', 'carpet', 'ceiling', 'ceilingvent',
+             'chair', 'clipboard', 'clock', 'coffeecup', 'computerbaseunit', 'computermouse',
+             'computermousepad', 'copier', 'cup', 'cupboard', 'desk', 'donut', 'door',
+             'eraser', 'filecabinet', 'firealarm', 'firesprinkler', 'floor', 'goblet',
+             'handdryer', 'headsculpture', 'jug', 'keyboard', 'lamp', 'laptop', 'light',
+             'marker', 'microphone', 'mirror', 'monitor', 'paperstack', 'paperstand',
+             'papertray', 'pen', 'pencil', 'pencilcontainer', 'phone', 'picture', 'pictureframe',
+             'plant', 'printer', 'rack', 'receptiondesk', 'rollingcabinet', 'securitycamera',
+             'sign', 'sink', 'skysphere', 'smartphone', 'smokedetector', 'soapdispenser', 'sofa',
+             'sticker', 'table', 'tabletpc', 'toilet', 'trashcan', 'tray', 'tv', 'urinal', 'vase',
              'wall', 'watercooler', 'whiteboardmagnet', 'window', 'writingmat', 'z']
 occ_eval_names = occ_names + ['free']
+
+# Precomputed from data/Office_sem_class_stats.json (integerized to 1-10) for lazy-parse safety.
+rare_classes = [13, 17, 23, 25, 28, 32, 39, 45, 60, 64, 66, 75, 77, 78]
+cls_weights = [
+    1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
+    1, 1, 1, 5, 1, 3, 1, 3, 2, 1,
+    2, 1, 1, 5, 1, 10, 1, 1, 3, 1,
+    1, 1, 3, 1, 2, 2, 2, 1, 1, 6,
+    1, 1, 1, 3, 2, 5, 2, 2, 2, 1,
+    1, 1, 1, 2, 1, 1, 2, 2, 1, 1,
+    5, 2, 1, 1, 4, 1, 7, 1, 1, 1,
+    1, 1, 1, 1, 1, 10, 1, 8, 7,
+]
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -39,14 +52,40 @@ point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
 pc_voxel_size = [0.05, 0.05, 0.05]
 voxel_size = [0.05, 0.05, 0.05]
 
+dataset_cfg = dict(
+    cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
+    num_views=input_modality.get('num_cams', 6),
+    occ_io=dict(
+        path_template='{scene_name}/{token}/labels.npz',
+        semantics_key='semantics',
+        mask_camera_key='mask_camera',
+        mask_lidar_key='mask_lidar',
+    ),
+    class_names=occ_names + ['free'],
+    empty_label=len(occ_names),
+    pc_range=point_cloud_range,
+    voxel_size=voxel_size,
+    ray=dict(
+        num_workers=8,
+        max_origins=8,
+        origin_xy_bound=39.0,
+        lidar=dict(
+            mode='nuscenes_default',
+            azimuth_step_deg=1.0,
+            pitch_angles=None,
+        ),
+    ),
+)
+
+
 # arch config
 embed_dims = 256
 num_layers = 6
-num_query = 2400
+num_query = 4800
 num_frames = 9
 num_levels = 4
 num_points = 4
-num_refines = [1, 4, 16, 32, 64, 128]
+num_refines = [1, 4, 16, 64, 128, 256]
 
 img_backbone = dict(
     type='ResNet',
@@ -131,6 +170,7 @@ model = dict(
             type='OPUSV1FusionTransformer',
             embed_dims=embed_dims,
             num_frames=num_frames,
+            num_views=dataset_cfg['num_views'],
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
@@ -151,12 +191,15 @@ model = dict(
             loss_weight=0.5)),
     train_cfg=dict(
         pts=dict(
-            cls_weights=[1] * len(occ_names)
+            cls_weights=cls_weights,
+            rare_classes=rare_classes,
+            rare_weights=12,
+            hard_camera_mask=True,
             )
         ),
     test_cfg=dict(
         pts=dict(
-            score_thr=0.5,
+            score_thr=0.3,
             padding=False)
     )
 )
@@ -173,13 +216,13 @@ ida_aug_conf = {
 imdecode_backend = 'pillow'
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color',imdecode_backend=imdecode_backend),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1,imdecode_backend=imdecode_backend),
+    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1,imdecode_backend=imdecode_backend, cam_types=dataset_cfg['cam_types']),
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=5, use_dim=5),
     dict(type='LoadPointsFromMultiSweeps', sweeps_num=9, use_dim=[0, 1, 2, 3, 4],
          pad_empty_sweeps=True, remove_close=True),
     dict(type='LiDARToOccSpace'),
     # dict(type='LoadAnnotations3D', with_bbox_3d=False, with_label_3d=True, with_attr_label=False),
-    dict(type='LoadOcc3DFromFile', occ_root=occ_root), 
+    dict(type='LoadOcc3DFromFile', occ_root=occ_root, path_template=dataset_cfg['occ_io']['path_template'], semantics_key=dataset_cfg['occ_io']['semantics_key'], mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'], mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'], class_names=dataset_cfg['class_names'], empty_label=dataset_cfg['empty_label']),
     # dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     # dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
@@ -192,7 +235,7 @@ train_pipeline = [
 
 test_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color',imdecode_backend=imdecode_backend),
-    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True,imdecode_backend=imdecode_backend),
+    dict(type='LoadMultiViewImageFromMultiSweeps', sweeps_num=num_frames - 1, test_mode=True,imdecode_backend=imdecode_backend, cam_types=dataset_cfg['cam_types']),
     dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=5, use_dim=5),
     dict(type='LoadPointsFromMultiSweeps', sweeps_num=9, use_dim=[0, 1, 2, 3, 4],
          pad_empty_sweeps=True, remove_close=True),
@@ -205,7 +248,7 @@ test_pipeline = [
         'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
-batch_size = 32
+batch_size = 16
 
 train_dataloader = dict(
     batch_size=batch_size,
@@ -220,6 +263,7 @@ train_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=False),
     collate_fn=dict(type='pseudo_collate'),
 )
@@ -237,6 +281,7 @@ val_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=True),
     collate_fn=dict(type='pseudo_collate'),
 )
@@ -254,6 +299,7 @@ test_dataloader = dict(
         classes=object_names,
         modality=input_modality,
         occ_root=occ_root,
+        dataset_cfg=dataset_cfg,
         test_mode=True),
     collate_fn=dict(type='pseudo_collate'),
 )
@@ -297,24 +343,36 @@ val_evaluator = dict(
     type='Occ3DMetric',
     ann_file=dataset_root + 'val.pkl',
     occ_root=occ_root,
-    empty_label=79,
+    occ_path_template=dataset_cfg['occ_io']['path_template'],
+    semantics_key=dataset_cfg['occ_io']['semantics_key'],
+    mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
+    mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    ray_num_workers=dataset_cfg['ray']['num_workers'],
+    ray_cfg=dataset_cfg['ray'],
+    empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     compute_rayiou=False,
-    pc_range=point_cloud_range,
-    voxel_size=voxel_size[0],
-    class_names=occ_eval_names,
+    pc_range=dataset_cfg['pc_range'],
+    voxel_size=dataset_cfg['voxel_size'],
+    class_names=dataset_cfg['class_names'],
     miou_num_workers=32,
 )
 test_evaluator = dict(
     type='Occ3DMetric',
     ann_file=dataset_root + 'test.pkl',
     occ_root=occ_root,
-    empty_label=79,
+    occ_path_template=dataset_cfg['occ_io']['path_template'],
+    semantics_key=dataset_cfg['occ_io']['semantics_key'],
+    mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
+    mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    ray_num_workers=dataset_cfg['ray']['num_workers'],
+    ray_cfg=dataset_cfg['ray'],
+    empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     compute_rayiou=False,
-    pc_range=point_cloud_range,
-    voxel_size=voxel_size[0],
-    class_names=occ_eval_names,
+    pc_range=dataset_cfg['pc_range'],
+    voxel_size=dataset_cfg['voxel_size'],
+    class_names=dataset_cfg['class_names'],
     miou_num_workers=32,
 )
 
