@@ -225,42 +225,25 @@ class RandomTransformImage:
     def __call__(self, results):
         resize, resize_dims, crop, flip, rotate = self.sample_augmentation()
         
-        if len(results['ego2img']) == len(results['img']):
-            for i in range(len(results['img'])):
-                img = Image.fromarray(np.uint8(results['img'][i]))
-                
-                # resize, resize_dims, crop, flip, rotate = self._sample_augmentation()
-                img, ida_mat = self.img_transform(
-                    img,
-                    resize=resize,
-                    resize_dims=resize_dims,
-                    crop=crop,
-                    flip=flip,
-                    rotate=rotate,
-                )
-                results['img'][i] = np.array(img).astype(np.uint8)
+        ida_mat = np.eye(4, dtype=np.float32)
+        for i in range(len(results['img'])):
+            img = Image.fromarray(np.uint8(results['img'][i]))
+
+            img, ida_mat = self.img_transform(
+                img,
+                resize=resize,
+                resize_dims=resize_dims,
+                crop=crop,
+                flip=flip,
+                rotate=rotate,
+            )
+            results['img'][i] = np.array(img).astype(np.uint8)
+            if len(results['ego2img']) == len(results['img']):
                 results['ego2img'][i] = ida_mat @ results['ego2img'][i]
 
-        elif len(results['img']) == 6:
-            for i in range(len(results['img'])):
-                img = Image.fromarray(np.uint8(results['img'][i]))
-                
-                # resize, resize_dims, crop, flip, rotate = self._sample_augmentation()
-                img, ida_mat = self.img_transform(
-                    img,
-                    resize=resize,
-                    resize_dims=resize_dims,
-                    crop=crop,
-                    flip=flip,
-                    rotate=rotate,
-                )
-                results['img'][i] = np.array(img).astype(np.uint8)
-
+        if len(results['ego2img']) != len(results['img']):
             for i in range(len(results['ego2img'])):
                 results['ego2img'][i] = ida_mat @ results['ego2img'][i]
-
-        else:
-            raise ValueError()
 
         results['ori_shape'] = [img.shape for img in results['img']]
         results['img_shape'] = [img.shape for img in results['img']]

@@ -1,17 +1,14 @@
 import os.path as osp
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 
 import numpy as np
-import torch
-from torch.utils.data import DataLoader
 
 from mmengine.evaluator import BaseMetric
 from mmengine.fileio import load
+from mmengine.logging import print_log
 from mmengine.registry import METRICS
 
 from models.utils import sparse2dense
-from ..ego_pose_dataset import EgoPoseDataset
-from ..ray_metrics import main_custom as calc_rayiou_custom
 
 
 def _load_infos(ann_file):
@@ -78,17 +75,123 @@ def _compute_hist(gt, pred, num_classes, mask=None):
     ).reshape(num_classes, num_classes)
 
 
-def _compute_miou(hist, empty_label):
+def _to_numpy(data):
+    if isinstance(data, np.ndarray):
+        return data
+    if hasattr(data, 'detach'):
+        data = data.detach()
+        if hasattr(data, 'cpu'):
+            data = data.cpu()
+        return data.numpy()
+    return np.asarray(data)
+
+
+def _sample_hist_from_sparse(occ_labels,
+                             mask,
+                             occ_loc,
+                             sem_pred,
+                             num_classes,
+                             empty_label):
+    occ_labels = np.asarray(occ_labels)
+    if mask is None:
+        mask = np.ones_like(occ_labels, dtype=np.bool_)
+    else:
+        mask = np.asarray(mask, dtype=np.bool_)
+
+    hist = np.zeros((num_classes, num_classes), dtype=np.float64)
+
+    gt_masked = occ_labels[mask].astype(np.int64, copy=False)
+    valid_gt_masked = (gt_masked >= 0) & (gt_masked < num_classes)
+    if np.any(valid_gt_masked):
+        gt_count = np.bincount(gt_masked[valid_gt_masked], minlength=num_classes)
+        hist[:, empty_label] = gt_count[:num_classes]
+
+    coords = _to_numpy(occ_loc)
+    pred = _to_numpy(sem_pred)
+    if coords.size == 0 or pred.size == 0:
+        return hist
+
+    coords = np.asarray(coords, dtype=np.int64).reshape(-1, 3)
+    pred = np.asarray(pred, dtype=np.int64).reshape(-1)
+    if coords.shape[0] != pred.shape[0]:
+        n = min(coords.shape[0], pred.shape[0])
+        coords = coords[:n]
+        pred = pred[:n]
+    if coords.shape[0] == 0:
+        return hist
+
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+    valid_coord = (
+        (x >= 0) & (x < occ_labels.shape[0]) &
+        (y >= 0) & (y < occ_labels.shape[1]) &
+        (z >= 0) & (z < occ_labels.shape[2])
+    )
+    if not np.any(valid_coord):
+        return hist
+    coords = coords[valid_coord]
+    pred = pred[valid_coord]
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+
+    # Match dense assignment behavior: if duplicated voxel exists, keep last write.
+    linear_idx = np.ravel_multi_index((x, y, z), dims=occ_labels.shape)
+    order = np.argsort(linear_idx, kind='stable')
+    linear_sorted = linear_idx[order]
+    keep = np.ones(order.shape[0], dtype=np.bool_)
+    keep[:-1] = linear_sorted[:-1] != linear_sorted[1:]
+    selected = order[keep]
+    coords = coords[selected]
+    pred = pred[selected]
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+
+    in_mask = mask[x, y, z]
+    if not np.any(in_mask):
+        return hist
+    coords = coords[in_mask]
+    pred = pred[in_mask]
+    x, y, z = coords[:, 0], coords[:, 1], coords[:, 2]
+
+    gt_at_pred = occ_labels[x, y, z].astype(np.int64, copy=False)
+    valid_gt = (gt_at_pred >= 0) & (gt_at_pred < num_classes)
+    if np.any(valid_gt):
+        dec = np.bincount(gt_at_pred[valid_gt], minlength=num_classes)
+        hist[:, empty_label] -= dec[:num_classes]
+
+    valid_cls = valid_gt & (pred >= 0) & (pred < num_classes)
+    if not np.any(valid_cls):
+        return hist
+    gt_at_pred = gt_at_pred[valid_cls]
+    pred = pred[valid_cls]
+
+    pair_hist = np.bincount(
+        num_classes * gt_at_pred + pred, minlength=num_classes**2
+    ).reshape(num_classes, num_classes)
+    hist += pair_hist
+
+    return hist
+
+
+def _compute_iou_vector(hist):
     hist = np.asarray(hist, dtype=np.float64)
     denom = hist.sum(1) + hist.sum(0) - np.diag(hist)
-    iou = np.divide(
-        np.diag(hist), denom,
+    return np.divide(
+        np.diag(hist),
+        denom,
         out=np.full(hist.shape[0], np.nan, dtype=np.float64),
         where=denom > 0,
     )
 
-    if empty_label is not None and 0 <= empty_label < hist.shape[0]:
-        valid_indices = [i for i in range(hist.shape[0]) if i != empty_label]
+
+def _valid_class_indices(num_classes, empty_label):
+    valid_indices = [idx for idx in range(num_classes)]
+    if empty_label is not None and 0 <= empty_label < num_classes:
+        valid_indices = [idx for idx in valid_indices if idx != empty_label]
+    return valid_indices
+
+
+def _compute_miou(hist, empty_label):
+    iou = _compute_iou_vector(hist)
+    valid_indices = _valid_class_indices(iou.shape[0], empty_label)
+    if valid_indices:
         mean_iou = np.nanmean(iou[valid_indices])
     else:
         mean_iou = np.nanmean(iou)
@@ -134,6 +237,7 @@ class Occ3DMetric(BaseMetric):
                  mask_lidar_key='mask_lidar',
                  ray_num_workers=8,
                  ray_cfg=None,
+                 focus_eval=None,
                  collect_device='cpu',
                  prefix=None,
                  collect_dir=None):
@@ -142,6 +246,7 @@ class Occ3DMetric(BaseMetric):
         self.occ_root = occ_root
         self.empty_label = int(empty_label)
         self.use_camera_mask = use_camera_mask
+        # Legacy args kept only for backward compatibility with old configs.
         self.compute_rayiou = compute_rayiou
         self.pc_range = pc_range
         self.voxel_size = _safe_voxel_size(voxel_size)
@@ -155,6 +260,122 @@ class Occ3DMetric(BaseMetric):
 
         self.ray_num_workers = ray_num_workers
         self.ray_cfg = ray_cfg or {}
+        self.focus_eval = focus_eval or {}
+        self.focus_class_freq_ema = None
+
+
+    def _class_name(self, class_idx):
+        if self.class_names is not None and class_idx < len(self.class_names):
+            return str(self.class_names[class_idx])
+        return f'class_{class_idx}'
+
+    def _update_focus_ema(self, class_freq, focus_cfg):
+        class_freq = np.asarray(class_freq, dtype=np.float64)
+        momentum = float(focus_cfg.get('ema_momentum', 0.9))
+        momentum = min(max(momentum, 0.0), 1.0)
+        if self.focus_class_freq_ema is None or self.focus_class_freq_ema.shape != class_freq.shape:
+            self.focus_class_freq_ema = class_freq.copy()
+        else:
+            self.focus_class_freq_ema = momentum * self.focus_class_freq_ema + (1.0 - momentum) * class_freq
+        return self.focus_class_freq_ema
+
+    def _select_focus_indices(self, class_count, focus_cfg):
+        num_classes = class_count.shape[0]
+        valid_indices = _valid_class_indices(num_classes, self.empty_label)
+        if not valid_indices:
+            return []
+
+        valid_count = class_count[valid_indices].astype(np.float64)
+        total = float(valid_count.sum())
+        if total > 0:
+            class_freq = valid_count / total
+        else:
+            class_freq = np.ones_like(valid_count) / max(len(valid_count), 1)
+
+        policy = focus_cfg.get('policy', 'ema_freq')
+        if policy == 'ema_freq':
+            effective_freq = self._update_focus_ema(class_freq, focus_cfg)
+        else:
+            effective_freq = class_freq
+
+        freq_thr = float(focus_cfg.get('freq_thr', 0.02))
+        min_classes = int(focus_cfg.get('min_classes', 1))
+        max_classes = int(focus_cfg.get('max_classes', len(valid_indices)))
+        max_classes = max(0, min(max_classes, len(valid_indices)))
+        if max_classes > 0 and min_classes > max_classes:
+            min_classes = max_classes
+
+        selected_local = [idx for idx, freq in enumerate(effective_freq) if freq <= freq_thr]
+
+        if len(selected_local) < min_classes:
+            order = np.argsort(effective_freq)
+            selected_set = set(selected_local)
+            for idx in order:
+                if idx not in selected_set:
+                    selected_local.append(int(idx))
+                    selected_set.add(int(idx))
+                if len(selected_local) >= min_classes:
+                    break
+
+        if max_classes == 0:
+            selected_local = []
+        elif len(selected_local) > max_classes:
+            selected_local = sorted(selected_local, key=lambda x: effective_freq[x])[:max_classes]
+
+        if len(selected_local) == 0 and focus_cfg.get('fallback', 'rare_classes') == 'rare_classes':
+            rare_classes = [int(x) for x in focus_cfg.get('rare_classes', [])]
+            rare_local = [
+                valid_indices.index(cls_idx)
+                for cls_idx in rare_classes
+                if cls_idx in valid_indices
+            ]
+            if rare_local:
+                if max_classes > 0:
+                    rare_local = rare_local[:max_classes]
+                selected_local = rare_local
+
+        selected_global = [valid_indices[idx] for idx in selected_local]
+        return selected_global
+
+    def _append_focus_metrics(self, metrics, hist, iou_vector):
+        focus_cfg = self.focus_eval or {}
+        if not focus_cfg.get('enabled', False):
+            return
+
+        class_count = hist.sum(axis=1)
+        focus_indices = self._select_focus_indices(class_count, focus_cfg)
+        valid_indices = _valid_class_indices(hist.shape[0], self.empty_label)
+        head_indices = [idx for idx in valid_indices if idx not in focus_indices]
+
+        if focus_indices:
+            small_miou = float(np.nanmean(iou_vector[focus_indices])) * 100.0
+        else:
+            small_miou = np.nan
+        if head_indices:
+            head_miou = float(np.nanmean(iou_vector[head_indices])) * 100.0
+        else:
+            head_miou = np.nan
+
+        metrics['mIoU_small'] = round(float(small_miou), 2)
+        metrics['mIoU_head'] = round(float(head_miou), 2)
+
+    def _log_per_class_iou(self, class_iou_items, metrics):
+        if not class_iou_items:
+            return
+
+        lines = ['Per-class IoU (%):']
+        for class_name, class_iou in class_iou_items:
+            lines.append(f'  {class_name:<24} {class_iou:7.2f}\n')
+
+        summary_parts = [f"mIoU={metrics.get('mIoU', np.nan):.2f}",
+                         f"IoU={metrics.get('IoU', np.nan):.2f}"]
+        if 'mIoU_small' in metrics:
+            summary_parts.append(f"mIoU_small={metrics['mIoU_small']:.2f}\n")
+        if 'mIoU_head' in metrics:
+            summary_parts.append(f"mIoU_head={metrics['mIoU_head']:.2f}\n")
+        lines.append('Summary: ' + ', '.join(summary_parts))
+
+        print_log('\n'.join(lines), logger='current')
 
     def process(self, data_batch, data_samples):
         batch_samples = data_batch.get('data_samples', []) if isinstance(data_batch, dict) else []
@@ -168,6 +389,26 @@ class Occ3DMetric(BaseMetric):
                 scene_name=meta.get('scene_name', None),
             ))
 
+    def _sample_hist(self, info, result_dict, num_classes):
+        occ_file = _build_occ_path(self.occ_root, self.occ_path_template, info)
+        with np.load(occ_file) as occ_infos:
+            occ_labels = np.asarray(occ_infos[self.semantics_key], dtype=np.uint8)
+            if self.use_camera_mask:
+                if self.mask_camera_key in occ_infos:
+                    mask = np.asarray(occ_infos[self.mask_camera_key], dtype=np.bool_)
+                else:
+                    mask = np.ones_like(occ_labels, dtype=np.bool_)
+            else:
+                mask = None
+
+        return _sample_hist_from_sparse(
+            occ_labels,
+            mask,
+            result_dict['occ_loc'],
+            result_dict['sem_pred'],
+            num_classes=num_classes,
+            empty_label=self.empty_label)
+
     def compute_metrics(self, results):
         data_infos = _load_infos(self.ann_file)
         ordered = _ordered_results(results, len(data_infos))
@@ -177,101 +418,67 @@ class Occ3DMetric(BaseMetric):
             num_classes = max(num_classes, len(self.class_names))
 
         hist = np.zeros((num_classes, num_classes), dtype=np.float64)
-        dense_preds = [None] * len(data_infos)
-        dense_gts = [None] * len(data_infos)
+        total_samples = min(len(data_infos), len(ordered))
+        num_workers = int(self.miou_num_workers or 0)
 
-        hist_inputs = []
-        for idx, info in enumerate(data_infos):
-            if idx >= len(ordered):
-                break
-            result_dict = ordered[idx]['pred']
-            occ_file = _build_occ_path(self.occ_root, self.occ_path_template, info)
-            occ_infos = np.load(occ_file)
-
-            occ_labels = np.asarray(occ_infos[self.semantics_key], dtype=np.int64)
-            mask_camera = np.asarray(
-                occ_infos[self.mask_camera_key], dtype=np.bool_) if self.mask_camera_key in occ_infos \
-                else np.ones_like(occ_labels, dtype=np.bool_)
-            mask_lidar = np.asarray(
-                occ_infos[self.mask_lidar_key], dtype=np.bool_) if self.mask_lidar_key in occ_infos \
-                else np.ones_like(occ_labels, dtype=np.bool_)
-
-            occ_pred, _ = sparse2dense(
-                result_dict['occ_loc'],
-                result_dict['sem_pred'],
-                dense_shape=occ_labels.shape,
-                empty_value=self.empty_label)
-            occ_pred = np.asarray(occ_pred, dtype=np.int64)
-
-            dense_preds[idx] = occ_pred
-            dense_gts[idx] = occ_labels
-
-            mask = mask_camera if self.use_camera_mask else None
-            hist_inputs.append((occ_labels, occ_pred, mask_lidar, mask_camera, mask))
-
-        def _hist_worker(args):
-            occ_labels, occ_pred, _mask_lidar, _mask_camera, mask = args
-            return _compute_hist(occ_labels, occ_pred, num_classes, mask=mask)
-
-        if self.miou_num_workers and self.miou_num_workers > 0:
-            with ThreadPoolExecutor(max_workers=self.miou_num_workers) as executor:
-                for sample_hist in executor.map(_hist_worker, hist_inputs):
-                    hist += sample_hist
+        if num_workers <= 1 or total_samples <= 1:
+            for idx in range(total_samples):
+                info = data_infos[idx]
+                result_dict = ordered[idx]['pred']
+                hist += self._sample_hist(info, result_dict, num_classes)
         else:
-            for item in hist_inputs:
-                hist += _hist_worker(item)
+            max_workers = min(num_workers, total_samples)
+            max_pending = max_workers * 2
 
+            def _sample_args():
+                for sample_idx in range(total_samples):
+                    yield sample_idx, data_infos[sample_idx], ordered[sample_idx]['pred']
+
+            arg_iter = iter(_sample_args())
+            futures = {}
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                for _ in range(max_pending):
+                    try:
+                        sample_idx, info, result_dict = next(arg_iter)
+                    except StopIteration:
+                        break
+                    future = executor.submit(self._sample_hist, info, result_dict, num_classes)
+                    futures[future] = sample_idx
+
+                while futures:
+                    done, _ = wait(futures, return_when=FIRST_COMPLETED)
+                    for future in done:
+                        sample_idx = futures.pop(future)
+                        try:
+                            hist += future.result()
+                        except Exception as exc:
+                            raise RuntimeError(
+                                f'Failed to compute mIoU histogram for sample index {sample_idx}.'
+                            ) from exc
+
+                    for _ in range(len(done)):
+                        try:
+                            sample_idx, info, result_dict = next(arg_iter)
+                        except StopIteration:
+                            break
+                        future = executor.submit(self._sample_hist, info, result_dict, num_classes)
+                        futures[future] = sample_idx
+
+        iou_vector = _compute_iou_vector(hist)
         metrics = {
             'mIoU': _compute_miou(hist, self.empty_label),
             'IoU': round(_compute_occupied_iou(hist, self.empty_label) * 100, 2),
         }
 
-        if not self.compute_rayiou:
-            return metrics
+        class_iou_items = []
+        for class_idx in _valid_class_indices(num_classes, self.empty_label):
+            class_name = self._class_name(class_idx)
+            class_iou = round(float(iou_vector[class_idx] * 100.0), 2)
+            metrics[f'IoU/{class_name}'] = class_iou
+            class_iou_items.append((class_name, class_iou))
 
-        max_origins = self.ray_cfg.get('max_origins', 8)
-        origin_xy_bound = self.ray_cfg.get('origin_xy_bound', 39.0)
-        data_loader = DataLoader(
-            EgoPoseDataset(data_infos, max_origins=max_origins, origin_xy_bound=origin_xy_bound),
-            batch_size=1,
-            shuffle=False,
-            num_workers=self.ray_num_workers,
-        )
-
-        token_to_idx = {
-            _info_with_aliases(info).get('token'): i
-            for i, info in enumerate(data_infos)
-        }
-
-        lidar_origins = []
-        ray_occ_preds = []
-        ray_occ_gts = []
-
-        for batch_idx, batch in enumerate(data_loader):
-            token = batch[0][0]
-            output_origin = batch[1]
-
-            data_id = token_to_idx.get(token, batch_idx)
-            if data_id >= len(dense_preds):
-                continue
-            if dense_preds[data_id] is None or dense_gts[data_id] is None:
-                continue
-
-            lidar_origins.append(output_origin)
-            ray_occ_preds.append(dense_preds[data_id])
-            ray_occ_gts.append(dense_gts[data_id])
-
-        if ray_occ_preds and ray_occ_gts and lidar_origins:
-            ray_metrics = calc_rayiou_custom(
-                ray_occ_preds,
-                ray_occ_gts,
-                lidar_origins,
-                pc_range=self.pc_range,
-                voxel_size=self.voxel_size,
-                class_names=self.class_names,
-                empty_label=self.empty_label,
-                ray_cfg=self.ray_cfg)
-            metrics.update(ray_metrics)
+        self._append_focus_metrics(metrics, hist, iou_vector)
+        self._log_per_class_iou(class_iou_items, metrics)
 
         return metrics
 

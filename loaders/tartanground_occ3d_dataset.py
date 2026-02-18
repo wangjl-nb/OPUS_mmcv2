@@ -180,7 +180,6 @@ class TartangroundOcc3DDataset(BaseDataset):
 
         occ_io_cfg = self.dataset_cfg.get('occ_io', {})
         metric_cfg = self.dataset_cfg.get('metric', {})
-        ray_cfg = self.dataset_cfg.get('ray', {})
 
         return Occ3DMetric(
             ann_file=self.ann_file,
@@ -189,8 +188,6 @@ class TartangroundOcc3DDataset(BaseDataset):
                 'empty_label', self.dataset_cfg.get('empty_label', metric_cfg.get('empty_label', 79))),
             use_camera_mask=eval_kwargs.get(
                 'use_camera_mask', metric_cfg.get('use_camera_mask', True)),
-            compute_rayiou=eval_kwargs.get(
-                'compute_rayiou', metric_cfg.get('compute_rayiou', True)),
             pc_range=eval_kwargs.get('pc_range', self.dataset_cfg.get('pc_range', None)),
             voxel_size=eval_kwargs.get('voxel_size', self.dataset_cfg.get('voxel_size', None)),
             class_names=eval_kwargs.get('class_names', self.dataset_cfg.get('class_names', None)),
@@ -204,8 +201,6 @@ class TartangroundOcc3DDataset(BaseDataset):
                 'mask_camera_key', occ_io_cfg.get('mask_camera_key', 'mask_camera')),
             mask_lidar_key=eval_kwargs.get(
                 'mask_lidar_key', occ_io_cfg.get('mask_lidar_key', 'mask_lidar')),
-            ray_num_workers=eval_kwargs.get('ray_num_workers', ray_cfg.get('num_workers', 8)),
-            ray_cfg=eval_kwargs.get('ray_cfg', ray_cfg),
         )
 
     def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):

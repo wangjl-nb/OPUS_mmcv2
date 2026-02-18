@@ -2,8 +2,8 @@ default_scope = 'mmdet3d'
 custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
-dataset_root = '/root/wjl/data/tartanground_demo/'
-occ_root = '/root/wjl/tartanground_demo/gts/'
+dataset_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -19,32 +19,60 @@ object_names = [
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
-occ_names = ['others', 'bathroompartition', 'binder', 'blinds', 'book', 'bottle',
-             'briefcase', 'building', 'cardboardbox', 'carpet', 'ceiling', 'ceilingvent',
-             'chair', 'clipboard', 'clock', 'coffeecup', 'computerbaseunit', 'computermouse',
-             'computermousepad', 'copier', 'cup', 'cupboard', 'desk', 'donut', 'door',
-             'eraser', 'filecabinet', 'firealarm', 'firesprinkler', 'floor', 'goblet',
-             'handdryer', 'headsculpture', 'jug', 'keyboard', 'lamp', 'laptop', 'light',
-             'marker', 'microphone', 'mirror', 'monitor', 'paperstack', 'paperstand',
-             'papertray', 'pen', 'pencil', 'pencilcontainer', 'phone', 'picture', 'pictureframe',
-             'plant', 'printer', 'rack', 'receptiondesk', 'rollingcabinet', 'securitycamera',
-             'sign', 'sink', 'skysphere', 'smartphone', 'smokedetector', 'soapdispenser', 'sofa',
-             'sticker', 'table', 'tabletpc', 'toilet', 'trashcan', 'tray', 'tv', 'urinal', 'vase',
-             'wall', 'watercooler', 'whiteboardmagnet', 'window', 'writingmat', 'z']
+occ_names = [
+    'others', 'acousticceiling', 'airconditiongvent', 'atm', 'awning', 'bakerycounter',
+    'bannersign', 'barcounter', 'barrel', 'barshelf', 'beam', 'bed',
+    'bench', 'bleach', 'blinds', 'boatcovered', 'book', 'boxedfood',
+    'boxedlaundrydetergent', 'bp', 'building', 'buildingtunnel', 'cabinet', 'cabinets',
+    'cable', 'cabledrum', 'cameraactor', 'car', 'carpet', 'cashregister',
+    'ceiling', 'cementcolumn', 'chain', 'chair', 'chairs', 'chasis',
+    'childactor', 'chipscylinder', 'cieling', 'cleaningpowder', 'column', 'concretebarricade',
+    'couch', 'counch', 'cranerail', 'cucumbers', 'cupboard', 'curtain',
+    'decorativecookiebox', 'desk', 'donuts', 'door', 'doorway', 'dumpster',
+    'elevator', 'elevatordoor', 'fabricsoftener', 'fence', 'fencecolumn', 'floor',
+    'flowerpot', 'fluorescentlight', 'foldingscreen', 'frozenfoodbagged', 'fryingoil', 'garagedoor',
+    'garbagecan', 'gate', 'grass', 'ground', 'handtruck', 'heater',
+    'instancedfoliageactor', 'ivy', 'laboratorytable', 'lamp', 'largeconduit', 'light',
+    'lightbulbstring', 'meatchub', 'metalcieling', 'metalfloor', 'metalhandrail', 'metalpanel',
+    'metalpillar', 'metalplatform', 'metalpole', 'metalramp', 'metalstair', 'metalsupport',
+    'metaltop', 'mirror', 'monitor', 'oranges', 'overheadcrane', 'painting',
+    'papertowels', 'petfoodtub', 'piano', 'picture', 'pictureframe', 'pillar',
+    'pipe', 'plant', 'plantholder', 'platform', 'post', 'railgatebase',
+    'railing', 'railtrack', 'railtrackend', 'receptiondesk', 'refrigerator', 'road',
+    'robotarm', 'rock', 'rollingcabinet', 'roof', 'rug', 'saucebottle',
+    'screendivider', 'seat', 'sewergrate', 'shampoo', 'shelf', 'shoppingbags',
+    'sidewalk', 'sign', 'sky', 'sodabottle', 'sofa', 'stair',
+    'stairs', 'staticmeshactor', 'storagerack', 'streetlight', 'supportarch', 'supportbeam',
+    'supportcolumn', 'table', 'tireassembly', 'toolbox', 'trashcan', 'tree',
+    'tunnel', 'tv', 'vendingmachine', 'vent', 'ventilationgrill', 'ventpipe',
+    'vine', 'walkway', 'wall', 'wallarch', 'wallarchway', 'walllight',
+    'walls', 'window', 'windowframe', 'woodenbox', 'woodenpallet', 'woodenplank',
+]
 occ_eval_names = occ_names + ['free']
 
-# Precomputed from data/Office_sem_class_stats.json (integerized to 1-10) for lazy-parse safety.
-rare_classes = [13, 17, 23, 25, 28, 32, 39, 45, 60, 64, 66, 75, 77, 78]
-cls_weights = [
-    1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
-    1, 1, 1, 5, 1, 3, 1, 3, 2, 1,
-    2, 1, 1, 5, 1, 10, 1, 1, 3, 1,
-    1, 1, 3, 1, 2, 2, 2, 1, 1, 6,
-    1, 1, 1, 3, 2, 5, 2, 2, 2, 1,
-    1, 1, 1, 2, 1, 1, 2, 2, 1, 1,
-    5, 2, 1, 1, 4, 1, 7, 1, 1, 1,
-    1, 1, 1, 1, 1, 10, 1, 8, 7,
+# Precomputed from semantic_unify_report.json.
+# cls_weights in [1, 30] by inverse-frequency sqrt mapping:
+#   w_i = round(1 + 29 * norm((max_count / count_i) ** 0.5))
+# others(id=0) is manually fixed to 10.
+rare_classes = [
+    13, 26, 50, 65, 76, 140, 134, 112, 56, 39, 32, 5,
+    29, 55, 19, 96, 37, 66, 106, 129, 53, 61, 23, 92,
 ]
+cls_weights = [
+    10, 2, 15, 23, 7, 28, 26, 14, 18, 12, 7, 22, 20, 30, 10, 13,
+    17, 14, 26, 27, 1, 3, 5, 26, 7, 18, 29, 16, 9, 28, 2, 9,
+    28, 7, 20, 12, 12, 27, 22, 28, 14, 18, 15, 26, 16, 10, 14, 25,
+    21, 13, 29, 4, 8, 27, 5, 28, 28, 7, 15, 1, 26, 26, 26, 18,
+    21, 29, 27, 25, 4, 3, 21, 20, 4, 20, 24, 14, 29, 7, 11, 12,
+    2, 5, 9, 6, 16, 11, 8, 19, 9, 12, 24, 23, 26, 25, 17, 23,
+    27, 21, 25, 22, 16, 5, 2, 17, 22, 18, 27, 18, 8, 12, 26, 26,
+    28, 9, 13, 14, 23, 7, 6, 24, 22, 12, 23, 5, 16, 25, 5, 7,
+    2, 27, 8, 15, 4, 16, 28, 13, 5, 4, 19, 9, 29, 15, 23, 24,
+    4, 16, 15, 8, 21, 11, 16, 4, 1, 6, 20, 9, 5, 15, 7, 17,
+    23, 26,
+]
+# Keep stronger long-tail priors while avoiding over-amplified gradients.
+cls_weights = [max(1, int(round(w * 0.8))) for w in cls_weights]
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
@@ -84,11 +112,18 @@ dataset_cfg = dict(
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
 num_layers = 6
-num_query = 9600  # Main occupancy query budget.
+num_query = 8000  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
-num_refines = [1, 4, 16, 32, 64, 128]  # Decoder point expansion per layer.
+num_refines = [
+                1,
+                4,
+                4,
+                16,
+                32,
+                64,
+            ]  # Decoder point expansion per layer.
 
 img_backbone = dict(
     type='ResNet',
@@ -166,7 +201,7 @@ model = dict(
         in_channels=embed_dims,
         num_query=num_query,
         pc_range=point_cloud_range,
-        empty_label=79,  # Index of free/unoccupied voxel label.
+        empty_label=dataset_cfg['empty_label'],  # Index of free/unoccupied voxel label.
         voxel_size=voxel_size,
         init_pos_lidar='curr',
         transformer=dict(
@@ -195,18 +230,18 @@ model = dict(
             _scope_='mmdet',
             gamma=2.0,  # Focus on hard classification samples.
             alpha=0.25,  # Class-balance factor in focal loss.
-            loss_weight=2.0),  # Global weight of classification branch.
+            loss_weight=1.6),  # Global weight of classification branch.
         loss_pts=dict(
             type='SmoothL1Loss',
             _scope_='mmdet',
             beta=0.2,  # Transition point between L1 and L2 region.
-            loss_weight=0.5)),  # Global weight of point-regression branch.
+            loss_weight=0.7)),  # Global weight of point-regression branch.
     train_cfg=dict(
         pts=dict(
             # Base long-tail priors.
             cls_weights=cls_weights,  # Per-class static re-weight for classification.
             rare_classes=rare_classes,  # Fallback tail class ids.
-            rare_weights=12,  # Legacy rare-class minimum regression weight.
+            rare_weights=3,  # Legacy rare-class minimum regression weight.
             hard_camera_mask=True,  # Only keep camera-visible voxels as GT anchors.
 
             # Phase-1: tail-aware dynamic weighting (enabled by default).
@@ -214,26 +249,26 @@ model = dict(
                 enabled=True,
                 policy='ema_freq',  # Select tail classes from EMA class frequency.
                 ema_momentum=0.9,  # Higher -> smoother but slower adaptation.
-                freq_thr=0.02,  # Class is tail when EMA frequency <= threshold.
-                min_tail_classes=8,  # Force at least this many tail classes.
-                max_tail_classes=24,  # Cap tail set size.
+                freq_thr=0.015,  # Class is tail when EMA frequency <= threshold.
+                min_tail_classes=6,  # Force at least this many tail classes.
+                max_tail_classes=20,  # Cap tail set size.
                 sync_stats=True,  # All-reduce class stats in DDP.
                 fallback='rare_classes',  # Use rare_classes when EMA result is unstable/empty.
-                tail_weight=12,  # Extra weight multiplier/min-clamp for tail samples.
+                tail_weight=3,  # Extra weight multiplier/min-clamp for tail samples.
             ),
 
             # Phase-1: pred->gt regression hard mining.
             hard_mining=dict(
                 enabled=True,
-                pred_topk_ratio=0.5,  # Keep top-50% hardest pred->gt pairs by distance.
-                min_keep=1024,  # Floor for kept pairs to avoid over-pruning.
+                pred_topk_ratio=0.6,  # Keep top-60% hardest pred->gt pairs by distance.
+                min_keep=1536,  # Floor for kept pairs to avoid over-pruning.
             ),
 
             # Phase-1: class-balanced GT sampling before matching.
             gt_balance=dict(
                 enabled=True,
                 per_class_cap=8192,  # Max GT points per class.
-                tail_min_keep=128,  # Tail classes are repeated to reach this minimum.
+                tail_min_keep=96,  # Tail classes are repeated to reach this minimum.
                 sample_mode='random',  # Deterministic sampling/repeat order.
             ),
 
@@ -248,7 +283,7 @@ model = dict(
     ),
     test_cfg=dict(
         pts=dict(
-            score_thr=0.3,
+            score_thr=0.25,
             padding=False)
     )
 )
@@ -356,7 +391,7 @@ test_dataloader = dict(
 
 optimizer = dict(
     type='AdamW',
-    lr=2e-4,
+    lr=1.8e-4,
     weight_decay=0.01
 )
 
@@ -374,7 +409,7 @@ optim_wrapper = dict(
 # learning policy
 total_epochs = 100
 param_scheduler = [
-    dict(type='LinearLR', start_factor=1.0 / 3, by_epoch=False, begin=0, end=500),
+    dict(type='LinearLR', start_factor=1.0 / 3, by_epoch=False, begin=0, end=1000),
     dict(
         type='CosineAnnealingLR',
         T_max=total_epochs,
@@ -385,7 +420,7 @@ param_scheduler = [
 ]
 
 # load pretrained weights
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=total_epochs//10)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=5)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
@@ -397,11 +432,8 @@ val_evaluator = dict(
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
     mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
     mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
-    ray_num_workers=dataset_cfg['ray']['num_workers'],
-    ray_cfg=dataset_cfg['ray'],
     empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
-    compute_rayiou=False,
     pc_range=dataset_cfg['pc_range'],
     voxel_size=dataset_cfg['voxel_size'],
     class_names=dataset_cfg['class_names'],
@@ -426,11 +458,8 @@ test_evaluator = dict(
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
     mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
     mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
-    ray_num_workers=dataset_cfg['ray']['num_workers'],
-    ray_cfg=dataset_cfg['ray'],
     empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
-    compute_rayiou=False,
     pc_range=dataset_cfg['pc_range'],
     voxel_size=dataset_cfg['voxel_size'],
     class_names=dataset_cfg['class_names'],
@@ -452,7 +481,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=1),
+    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

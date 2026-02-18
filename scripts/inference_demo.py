@@ -338,6 +338,7 @@ def main():
                 occ_loc = np.asarray(result['occ_loc'])
 
                 mask_camera, occ_infos = get_mask_camera(sample, base_dataset)
+                mask_camera = None
                 if mask_camera is None:
                     if not camera_mask_warned:
                         print('[InferenceDemo] mask_camera not found, keep unmasked predictions.')

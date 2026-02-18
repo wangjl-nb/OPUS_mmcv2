@@ -35,6 +35,7 @@ class OPUSV1FusionTransformer(BaseModule):
                  num_groups=4,
                  num_refines=[1, 2, 4, 8, 16, 32],
                  scales=[1.0],
+                 query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
         assert init_cfg is None, 'To prevent abnormal initialization ' \
@@ -47,7 +48,8 @@ class OPUSV1FusionTransformer(BaseModule):
 
         self.decoder = OPUSTransformerDecoder(
             embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
-            num_classes, num_refines, num_groups, scales, pc_range=pc_range)
+            num_classes, num_refines, num_groups, scales,
+            query_allocator=query_allocator, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
@@ -75,6 +77,7 @@ class OPUSTransformerDecoder(BaseModule):
                  num_refines=16,
                  num_groups=4,
                  scales=[1.0],
+                 query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
         super().__init__(init_cfg)
@@ -83,6 +86,7 @@ class OPUSTransformerDecoder(BaseModule):
         self.num_frames = num_frames
         self.num_views = num_views
         self.num_groups = num_groups
+        self.query_allocator = query_allocator or {}
 
         if len(scales) == 1:
             scales = scales * num_layers
@@ -107,6 +111,86 @@ class OPUSTransformerDecoder(BaseModule):
         for layer in self.decoder_layers:
             if hasattr(layer, 'init_weights'):
                 layer.init_weights()
+
+    def _apply_query_allocator(self, query_points, query_feat, cls_score, layer_idx):
+        allocator_cfg = self.query_allocator or {}
+        if not allocator_cfg.get('enabled', False):
+            return query_points, query_feat
+
+        switch_layer = int(allocator_cfg.get('switch_layer', 2))
+        if layer_idx != switch_layer - 1:
+            return query_points, query_feat
+
+        B, Q, P, Cxyz = query_points.shape
+        if Q <= 1:
+            return query_points, query_feat
+
+        cls_prob = cls_score.sigmoid()
+        nonempty_score = cls_prob.max(dim=-1).values.mean(dim=-1)  # [B, Q]
+
+        num_classes = max(cls_prob.shape[-1], 1)
+        entropy = -(cls_prob.clamp(min=1e-6, max=1 - 1e-6) *
+                    torch.log(cls_prob.clamp(min=1e-6, max=1 - 1e-6))).sum(dim=-1)
+        entropy = entropy / max(np.log(float(num_classes)), 1.0)
+        uncertainty_score = entropy.mean(dim=-1)  # [B, Q]
+
+        score_weights = allocator_cfg.get('score_weights', {})
+        nonempty_w = float(score_weights.get('nonempty', 0.5))
+        uncertainty_w = float(score_weights.get('uncertainty', 0.5))
+
+        context_ratio = float(allocator_cfg.get('context_ratio', 0.6))
+        context_ratio = min(max(context_ratio, 0.0), 1.0)
+        num_context = int(round(Q * context_ratio))
+        num_context = max(0, min(Q, num_context))
+        num_detail = Q - num_context
+
+        detail_score = nonempty_w * (1.0 - nonempty_score) + uncertainty_w * uncertainty_score
+        context_rank = torch.argsort(nonempty_score, dim=-1, descending=True)
+        detail_rank = torch.argsort(detail_score, dim=-1, descending=True)
+
+        if num_context > 0:
+            context_idx = context_rank[:, :num_context]
+        else:
+            context_idx = context_rank[:, :0]
+
+        detail_indices = []
+        for batch_idx in range(B):
+            detail_idx = detail_rank[batch_idx]
+            if num_context > 0:
+                used = torch.zeros(Q, dtype=torch.bool, device=detail_idx.device)
+                used[context_idx[batch_idx]] = True
+                detail_idx = detail_idx[~used[detail_idx]]
+            if detail_idx.numel() < num_detail:
+                short = num_detail - detail_idx.numel()
+                detail_idx = torch.cat([detail_idx, detail_rank[batch_idx, :short]], dim=0)
+            detail_indices.append(detail_idx[:num_detail])
+
+        if num_detail > 0:
+            detail_idx = torch.stack(detail_indices, dim=0)
+            gather_idx = torch.cat([context_idx, detail_idx], dim=1)
+        else:
+            gather_idx = context_idx
+
+        gather_points_idx = gather_idx[..., None, None].expand(B, Q, P, Cxyz)
+        gather_feat_idx = gather_idx[..., None].expand(B, Q, query_feat.shape[-1])
+        new_query_points = torch.gather(query_points, dim=1, index=gather_points_idx)
+        new_query_feat = torch.gather(query_feat, dim=1, index=gather_feat_idx)
+
+        detail_jitter_std = float(allocator_cfg.get('detail_jitter_std', 0.0))
+        if detail_jitter_std > 0 and num_detail > 0:
+            detail_slice = slice(num_context, Q)
+            detail_points = decode_points(new_query_points[:, detail_slice], self.pc_range)
+            detail_points = detail_points + torch.randn_like(detail_points) * detail_jitter_std
+
+            pc_range = detail_points.new_tensor(self.pc_range)
+            lower = pc_range[:3]
+            upper = pc_range[3:]
+            detail_points = detail_points.clamp(min=lower, max=upper)
+
+            new_query_points = new_query_points.clone()
+            new_query_points[:, detail_slice] = encode_points(detail_points, self.pc_range)
+
+        return new_query_points, new_query_feat
 
     def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas):
         cls_scores, refine_pts = [], []
@@ -159,6 +243,11 @@ class OPUSTransformerDecoder(BaseModule):
             debug_is_finite(f'decoder_layer[{i}].query_points', query_points)
             cls_scores.append(cls_score)
             refine_pts.append(query_points)
+            query_points, query_feat = self._apply_query_allocator(
+                query_points,
+                query_feat,
+                cls_score,
+                layer_idx=i)
 
         return cls_scores, refine_pts
 
