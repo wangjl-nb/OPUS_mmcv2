@@ -223,10 +223,10 @@ def main():
                         help='Split dataset into N shards for multi-process/multi-GPU inference')
     parser.add_argument('--shard-id', type=int, default=0,
                         help='Shard index in [0, num_shards-1]')
-    parser.add_argument('--max-points', type=int, default=200000, help='Max points to draw')
+    parser.add_argument('--max-points', type=int, default=2000000000, help='Max points to draw')
     parser.add_argument('--save-pred-ply', action='store_true', help='Save predicted points as PLY')
     parser.add_argument('--save-gt-ply', action='store_true', help='Save GT points as PLY')
-    parser.add_argument('--max-gt-points', type=int, default=200000, help='Max GT points to save')
+    parser.add_argument('--max-gt-points', type=int, default=20000000000, help='Max GT points to save')
     parser.add_argument('--gt-mask', choices=['none', 'camera', 'lidar'], default='camera',
                         help='Mask for GT voxels')
     parser.add_argument('--seed', type=int, default=0, help='Random seed')
