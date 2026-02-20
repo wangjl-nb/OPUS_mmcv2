@@ -1,0 +1,3538 @@
+2026/02/20 11:37:29 - mmengine - INFO - 
+------------------------------------------------------------
+System environment:
+    sys.platform: linux
+    Python: 3.10.19 (main, Oct 21 2025, 16:43:05) [GCC 11.2.0]
+    CUDA available: True
+    MUSA available: False
+    numpy_random_seed: 0
+    GPU 0: NVIDIA H20
+    CUDA_HOME: /root/miniconda3/envs/opus-mmcv2
+    NVCC: Cuda compilation tools, release 12.1, V12.1.66
+    GCC: gcc (Ubuntu 11.4.0-1ubuntu1~22.04) 11.4.0
+    PyTorch: 2.2.0
+    PyTorch compiling details: PyTorch built with:
+  - GCC 9.3
+  - C++ Version: 201703
+  - Intel(R) oneAPI Math Kernel Library Version 2023.1-Product Build 20230303 for Intel(R) 64 architecture applications
+  - Intel(R) MKL-DNN v3.3.2 (Git Hash 2dc95a2ad0841e29db8b22fbccaf3e5da7992b01)
+  - OpenMP 201511 (a.k.a. OpenMP 4.5)
+  - LAPACK is enabled (usually provided by MKL)
+  - NNPACK is enabled
+  - CPU capability usage: AVX512
+  - CUDA Runtime 12.1
+  - NVCC architecture flags: -gencode;arch=compute_50,code=sm_50;-gencode;arch=compute_60,code=sm_60;-gencode;arch=compute_61,code=sm_61;-gencode;arch=compute_70,code=sm_70;-gencode;arch=compute_75,code=sm_75;-gencode;arch=compute_80,code=sm_80;-gencode;arch=compute_86,code=sm_86;-gencode;arch=compute_90,code=sm_90
+  - CuDNN 8.9.2
+  - Magma 2.6.1
+  - Build settings: BLAS_INFO=mkl, BUILD_TYPE=Release, CUDA_VERSION=12.1, CUDNN_VERSION=8.9.2, CXX_COMPILER=/opt/rh/devtoolset-9/root/usr/bin/c++, CXX_FLAGS= -D_GLIBCXX_USE_CXX11_ABI=0 -fabi-version=11 -fvisibility-inlines-hidden -DUSE_PTHREADPOOL -DNDEBUG -DUSE_KINETO -DLIBKINETO_NOROCTRACER -DUSE_FBGEMM -DUSE_QNNPACK -DUSE_PYTORCH_QNNPACK -DUSE_XNNPACK -DSYMBOLICATE_MOBILE_DEBUG_HANDLE -O2 -fPIC -Wall -Wextra -Werror=return-type -Werror=non-virtual-dtor -Werror=bool-operation -Wnarrowing -Wno-missing-field-initializers -Wno-type-limits -Wno-array-bounds -Wno-unknown-pragmas -Wno-unused-parameter -Wno-unused-function -Wno-unused-result -Wno-strict-overflow -Wno-strict-aliasing -Wno-stringop-overflow -Wsuggest-override -Wno-psabi -Wno-error=pedantic -Wno-error=old-style-cast -Wno-missing-braces -fdiagnostics-color=always -faligned-new -Wno-unused-but-set-variable -Wno-maybe-uninitialized -fno-math-errno -fno-trapping-math -Werror=format -Wno-stringop-overflow, LAPACK_INFO=mkl, PERF_WITH_AVX=1, PERF_WITH_AVX2=1, PERF_WITH_AVX512=1, TORCH_VERSION=2.2.0, USE_CUDA=ON, USE_CUDNN=ON, USE_EXCEPTION_PTR=1, USE_GFLAGS=OFF, USE_GLOG=OFF, USE_MKL=ON, USE_MKLDNN=ON, USE_MPI=OFF, USE_NCCL=ON, USE_NNPACK=ON, USE_OPENMP=ON, USE_ROCM=OFF, USE_ROCM_KERNEL_ASSERT=OFF, 
+
+    TorchVision: 0.17.0
+    OpenCV: 4.13.0
+    MMEngine: 0.10.7
+
+Runtime environment:
+    cudnn_benchmark: True
+    dist_cfg: {'backend': 'nccl'}
+    mp_cfg: {'mp_start_method': 'fork', 'opencv_num_threads': 0}
+    seed: 0
+    deterministic: False
+    Distributed launcher: none
+    Distributed training: False
+    GPU number: 1
+------------------------------------------------------------
+
+2026/02/20 11:37:30 - mmengine - INFO - Config:
+batch_size = 32
+bda_aug_conf = dict(flip_dx_ratio=0.5, flip_dy_ratio=0.5)
+cls_weights = [
+    10,
+    2,
+    15,
+    23,
+    7,
+    28,
+    26,
+    14,
+    18,
+    12,
+    7,
+    22,
+    20,
+    30,
+    10,
+    13,
+    17,
+    14,
+    26,
+    27,
+    1,
+    3,
+    5,
+    26,
+    7,
+    18,
+    29,
+    16,
+    9,
+    28,
+    2,
+    9,
+    28,
+    7,
+    20,
+    12,
+    12,
+    27,
+    22,
+    28,
+    14,
+    18,
+    15,
+    26,
+    16,
+    10,
+    14,
+    25,
+    21,
+    13,
+    29,
+    4,
+    8,
+    27,
+    5,
+    28,
+    28,
+    7,
+    15,
+    1,
+    26,
+    26,
+    26,
+    18,
+    21,
+    29,
+    27,
+    25,
+    4,
+    3,
+    21,
+    20,
+    4,
+    20,
+    24,
+    14,
+    29,
+    7,
+    11,
+    12,
+    2,
+    5,
+    9,
+    6,
+    16,
+    11,
+    8,
+    19,
+    9,
+    12,
+    24,
+    23,
+    26,
+    25,
+    17,
+    23,
+    27,
+    21,
+    25,
+    22,
+    16,
+    5,
+    2,
+    17,
+    22,
+    18,
+    27,
+    18,
+    8,
+    12,
+    26,
+    26,
+    28,
+    9,
+    13,
+    14,
+    23,
+    7,
+    6,
+    24,
+    22,
+    12,
+    23,
+    5,
+    16,
+    25,
+    5,
+    7,
+    2,
+    27,
+    8,
+    15,
+    4,
+    16,
+    28,
+    13,
+    5,
+    4,
+    19,
+    9,
+    29,
+    15,
+    23,
+    24,
+    4,
+    16,
+    15,
+    8,
+    21,
+    11,
+    16,
+    4,
+    1,
+    6,
+    20,
+    9,
+    5,
+    15,
+    7,
+    17,
+    23,
+    26,
+]
+custom_imports = dict(
+    allow_failed_imports=False, imports=[
+        'models',
+        'loaders',
+    ])
+dataset_cfg = dict(
+    cam_types=[
+        'CAM_LEFT',
+        'CAM_BACK',
+        'CAM_FRONT',
+        'CAM_BOTTOM',
+        'CAM_TOP',
+        'CAM_RIGHT',
+    ],
+    class_names=[
+        'others',
+        'acousticceiling',
+        'airconditiongvent',
+        'atm',
+        'awning',
+        'bakerycounter',
+        'bannersign',
+        'barcounter',
+        'barrel',
+        'barshelf',
+        'beam',
+        'bed',
+        'bench',
+        'bleach',
+        'blinds',
+        'boatcovered',
+        'book',
+        'boxedfood',
+        'boxedlaundrydetergent',
+        'bp',
+        'building',
+        'buildingtunnel',
+        'cabinet',
+        'cabinets',
+        'cable',
+        'cabledrum',
+        'cameraactor',
+        'car',
+        'carpet',
+        'cashregister',
+        'ceiling',
+        'cementcolumn',
+        'chain',
+        'chair',
+        'chairs',
+        'chasis',
+        'childactor',
+        'chipscylinder',
+        'cieling',
+        'cleaningpowder',
+        'column',
+        'concretebarricade',
+        'couch',
+        'counch',
+        'cranerail',
+        'cucumbers',
+        'cupboard',
+        'curtain',
+        'decorativecookiebox',
+        'desk',
+        'donuts',
+        'door',
+        'doorway',
+        'dumpster',
+        'elevator',
+        'elevatordoor',
+        'fabricsoftener',
+        'fence',
+        'fencecolumn',
+        'floor',
+        'flowerpot',
+        'fluorescentlight',
+        'foldingscreen',
+        'frozenfoodbagged',
+        'fryingoil',
+        'garagedoor',
+        'garbagecan',
+        'gate',
+        'grass',
+        'ground',
+        'handtruck',
+        'heater',
+        'instancedfoliageactor',
+        'ivy',
+        'laboratorytable',
+        'lamp',
+        'largeconduit',
+        'light',
+        'lightbulbstring',
+        'meatchub',
+        'metalcieling',
+        'metalfloor',
+        'metalhandrail',
+        'metalpanel',
+        'metalpillar',
+        'metalplatform',
+        'metalpole',
+        'metalramp',
+        'metalstair',
+        'metalsupport',
+        'metaltop',
+        'mirror',
+        'monitor',
+        'oranges',
+        'overheadcrane',
+        'painting',
+        'papertowels',
+        'petfoodtub',
+        'piano',
+        'picture',
+        'pictureframe',
+        'pillar',
+        'pipe',
+        'plant',
+        'plantholder',
+        'platform',
+        'post',
+        'railgatebase',
+        'railing',
+        'railtrack',
+        'railtrackend',
+        'receptiondesk',
+        'refrigerator',
+        'road',
+        'robotarm',
+        'rock',
+        'rollingcabinet',
+        'roof',
+        'rug',
+        'saucebottle',
+        'screendivider',
+        'seat',
+        'sewergrate',
+        'shampoo',
+        'shelf',
+        'shoppingbags',
+        'sidewalk',
+        'sign',
+        'sky',
+        'sodabottle',
+        'sofa',
+        'stair',
+        'stairs',
+        'staticmeshactor',
+        'storagerack',
+        'streetlight',
+        'supportarch',
+        'supportbeam',
+        'supportcolumn',
+        'table',
+        'tireassembly',
+        'toolbox',
+        'trashcan',
+        'tree',
+        'tunnel',
+        'tv',
+        'vendingmachine',
+        'vent',
+        'ventilationgrill',
+        'ventpipe',
+        'vine',
+        'walkway',
+        'wall',
+        'wallarch',
+        'wallarchway',
+        'walllight',
+        'walls',
+        'window',
+        'windowframe',
+        'woodenbox',
+        'woodenpallet',
+        'woodenplank',
+        'free',
+    ],
+    empty_label=162,
+    num_views=6,
+    occ_io=dict(
+        mask_camera_key='mask_camera',
+        mask_lidar_key='mask_lidar',
+        path_template='{scene_name}/{token}/labels.npz',
+        semantics_key='semantics'),
+    pc_range=[
+        -20.0,
+        -20.0,
+        -3.0,
+        20.0,
+        20.0,
+        5.0,
+    ],
+    ray=dict(
+        lidar=dict(
+            azimuth_step_deg=1.0, mode='nuscenes_default', pitch_angles=None),
+        max_origins=8,
+        num_workers=8,
+        origin_xy_bound=39.0),
+    voxel_size=[
+        0.05,
+        0.05,
+        0.05,
+    ])
+dataset_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/'
+dataset_type = 'TartangroundOcc3DDataset'
+default_hooks = dict(
+    checkpoint=dict(
+        interval=10, max_keep_ckpts=5, save_last=True, type='CheckpointHook'),
+    logger=dict(interval=1, type='LoggerHook'),
+    param_scheduler=dict(type='ParamSchedulerHook'),
+    sampler_seed=dict(type='DistSamplerSeedHook'),
+    timer=dict(type='IterTimerHook'))
+default_scope = 'mmdet3d'
+embed_dims = 256
+env_cfg = dict(
+    cudnn_benchmark=True,
+    dist_cfg=dict(backend='nccl'),
+    mp_cfg=dict(mp_start_method='fork', opencv_num_threads=0))
+ida_aug_conf = dict(
+    H=640,
+    W=640,
+    bot_pct_lim=(
+        0.0,
+        0.0,
+    ),
+    final_dim=(
+        640,
+        640,
+    ),
+    rand_flip=True,
+    resize_lim=(
+        1.0,
+        1.0,
+    ),
+    rot_lim=(
+        0.0,
+        0.0,
+    ))
+imdecode_backend = 'pillow'
+img_backbone = dict(
+    _scope_='mmdet',
+    depth=50,
+    frozen_stages=1,
+    norm_cfg=dict(requires_grad=True, type='BN2d'),
+    norm_eval=True,
+    num_stages=4,
+    out_indices=(
+        0,
+        1,
+        2,
+        3,
+    ),
+    style='pytorch',
+    type='ResNet',
+    with_cp=True)
+img_neck = dict(
+    _scope_='mmdet',
+    in_channels=[
+        256,
+        512,
+        1024,
+        2048,
+    ],
+    num_outs=4,
+    out_channels=256,
+    type='FPN')
+img_norm_cfg = dict(
+    mean=[
+        123.675,
+        116.28,
+        103.53,
+    ],
+    std=[
+        58.395,
+        57.12,
+        57.375,
+    ],
+    to_rgb=True)
+input_modality = dict(
+    use_camera=True,
+    use_external=True,
+    use_lidar=False,
+    use_map=False,
+    use_radar=False)
+launcher = 'none'
+load_from = 'pretrain/fusion_pretrain_model.pth'
+log_processor = dict(by_epoch=True, type='LogProcessor', window_size=1)
+model = dict(
+    data_aug=dict(
+        img_color_aug=True,
+        img_norm_cfg=dict(
+            mean=[
+                123.675,
+                116.28,
+                103.53,
+            ],
+            std=[
+                58.395,
+                57.12,
+                57.375,
+            ],
+            to_rgb=True),
+        img_pad_cfg=dict(size_divisor=32)),
+    data_preprocessor=dict(type='BaseDataPreprocessor'),
+    img_backbone=dict(
+        _scope_='mmdet',
+        depth=50,
+        frozen_stages=1,
+        norm_cfg=dict(requires_grad=True, type='BN2d'),
+        norm_eval=True,
+        num_stages=4,
+        out_indices=(
+            0,
+            1,
+            2,
+            3,
+        ),
+        style='pytorch',
+        type='ResNet',
+        with_cp=True),
+    img_neck=dict(
+        _scope_='mmdet',
+        in_channels=[
+            256,
+            512,
+            1024,
+            2048,
+        ],
+        num_outs=4,
+        out_channels=256,
+        type='FPN'),
+    pts_bbox_head=dict(
+        empty_label=162,
+        in_channels=256,
+        loss_cls=dict(
+            _scope_='mmdet',
+            alpha=0.25,
+            gamma=2.0,
+            loss_weight=2.0,
+            type='FocalLoss',
+            use_sigmoid=True),
+        loss_pts=dict(
+            _scope_='mmdet', beta=0.2, loss_weight=0.5, type='SmoothL1Loss'),
+        num_classes=162,
+        num_query=6400,
+        pc_range=[
+            -20.0,
+            -20.0,
+            -3.0,
+            20.0,
+            20.0,
+            5.0,
+        ],
+        transformer=dict(
+            embed_dims=256,
+            num_frames=9,
+            num_layers=5,
+            num_levels=4,
+            num_points=4,
+            num_pt_channels=32,
+            num_refines=[
+                1,
+                4,
+                4,
+                16,
+                32,
+            ],
+            num_views=6,
+            pc_range=[
+                -20.0,
+                -20.0,
+                -3.0,
+                20.0,
+                20.0,
+                5.0,
+            ],
+            scales=[
+                0.5,
+            ],
+            type='OPUSV2Transformer'),
+        type='OPUSV2Head',
+        voxel_size=[
+            0.05,
+            0.05,
+            0.05,
+        ]),
+    stop_prev_grad=0,
+    test_cfg=dict(pts=dict(score_thr=0.3)),
+    train_cfg=dict(
+        pts=dict(
+            cls_weights=[
+                10,
+                2,
+                15,
+                23,
+                7,
+                28,
+                26,
+                14,
+                18,
+                12,
+                7,
+                22,
+                20,
+                30,
+                10,
+                13,
+                17,
+                14,
+                26,
+                27,
+                1,
+                3,
+                5,
+                26,
+                7,
+                18,
+                29,
+                16,
+                9,
+                28,
+                2,
+                9,
+                28,
+                7,
+                20,
+                12,
+                12,
+                27,
+                22,
+                28,
+                14,
+                18,
+                15,
+                26,
+                16,
+                10,
+                14,
+                25,
+                21,
+                13,
+                29,
+                4,
+                8,
+                27,
+                5,
+                28,
+                28,
+                7,
+                15,
+                1,
+                26,
+                26,
+                26,
+                18,
+                21,
+                29,
+                27,
+                25,
+                4,
+                3,
+                21,
+                20,
+                4,
+                20,
+                24,
+                14,
+                29,
+                7,
+                11,
+                12,
+                2,
+                5,
+                9,
+                6,
+                16,
+                11,
+                8,
+                19,
+                9,
+                12,
+                24,
+                23,
+                26,
+                25,
+                17,
+                23,
+                27,
+                21,
+                25,
+                22,
+                16,
+                5,
+                2,
+                17,
+                22,
+                18,
+                27,
+                18,
+                8,
+                12,
+                26,
+                26,
+                28,
+                9,
+                13,
+                14,
+                23,
+                7,
+                6,
+                24,
+                22,
+                12,
+                23,
+                5,
+                16,
+                25,
+                5,
+                7,
+                2,
+                27,
+                8,
+                15,
+                4,
+                16,
+                28,
+                13,
+                5,
+                4,
+                19,
+                9,
+                29,
+                15,
+                23,
+                24,
+                4,
+                16,
+                15,
+                8,
+                21,
+                11,
+                16,
+                4,
+                1,
+                6,
+                20,
+                9,
+                5,
+                15,
+                7,
+                17,
+                23,
+                26,
+            ],
+            rare_classes=[
+                13,
+                26,
+                50,
+                65,
+                76,
+                140,
+                134,
+                112,
+                56,
+                39,
+                32,
+                5,
+                29,
+                55,
+                19,
+                96,
+                37,
+                66,
+                106,
+                129,
+                53,
+                61,
+                23,
+                92,
+            ],
+            rare_weights=2,
+            safe_injection=True,
+            safe_knn_chunk_size=50000,
+            safe_max_gt_points=60000,
+            safe_prioritize_visible=True)),
+    type='OPUSV2',
+    use_grid_mask=False)
+num_frames = 9
+num_layers = 5
+num_levels = 4
+num_points = 4
+num_pt_channels = 32
+num_query = 6400
+num_refines = [
+    1,
+    4,
+    4,
+    16,
+    32,
+]
+object_names = [
+    'car',
+    'truck',
+    'construction_vehicle',
+    'bus',
+    'trailer',
+    'barrier',
+    'motorcycle',
+    'bicycle',
+    'pedestrian',
+    'traffic_cone',
+]
+occ_eval_names = [
+    'others',
+    'acousticceiling',
+    'airconditiongvent',
+    'atm',
+    'awning',
+    'bakerycounter',
+    'bannersign',
+    'barcounter',
+    'barrel',
+    'barshelf',
+    'beam',
+    'bed',
+    'bench',
+    'bleach',
+    'blinds',
+    'boatcovered',
+    'book',
+    'boxedfood',
+    'boxedlaundrydetergent',
+    'bp',
+    'building',
+    'buildingtunnel',
+    'cabinet',
+    'cabinets',
+    'cable',
+    'cabledrum',
+    'cameraactor',
+    'car',
+    'carpet',
+    'cashregister',
+    'ceiling',
+    'cementcolumn',
+    'chain',
+    'chair',
+    'chairs',
+    'chasis',
+    'childactor',
+    'chipscylinder',
+    'cieling',
+    'cleaningpowder',
+    'column',
+    'concretebarricade',
+    'couch',
+    'counch',
+    'cranerail',
+    'cucumbers',
+    'cupboard',
+    'curtain',
+    'decorativecookiebox',
+    'desk',
+    'donuts',
+    'door',
+    'doorway',
+    'dumpster',
+    'elevator',
+    'elevatordoor',
+    'fabricsoftener',
+    'fence',
+    'fencecolumn',
+    'floor',
+    'flowerpot',
+    'fluorescentlight',
+    'foldingscreen',
+    'frozenfoodbagged',
+    'fryingoil',
+    'garagedoor',
+    'garbagecan',
+    'gate',
+    'grass',
+    'ground',
+    'handtruck',
+    'heater',
+    'instancedfoliageactor',
+    'ivy',
+    'laboratorytable',
+    'lamp',
+    'largeconduit',
+    'light',
+    'lightbulbstring',
+    'meatchub',
+    'metalcieling',
+    'metalfloor',
+    'metalhandrail',
+    'metalpanel',
+    'metalpillar',
+    'metalplatform',
+    'metalpole',
+    'metalramp',
+    'metalstair',
+    'metalsupport',
+    'metaltop',
+    'mirror',
+    'monitor',
+    'oranges',
+    'overheadcrane',
+    'painting',
+    'papertowels',
+    'petfoodtub',
+    'piano',
+    'picture',
+    'pictureframe',
+    'pillar',
+    'pipe',
+    'plant',
+    'plantholder',
+    'platform',
+    'post',
+    'railgatebase',
+    'railing',
+    'railtrack',
+    'railtrackend',
+    'receptiondesk',
+    'refrigerator',
+    'road',
+    'robotarm',
+    'rock',
+    'rollingcabinet',
+    'roof',
+    'rug',
+    'saucebottle',
+    'screendivider',
+    'seat',
+    'sewergrate',
+    'shampoo',
+    'shelf',
+    'shoppingbags',
+    'sidewalk',
+    'sign',
+    'sky',
+    'sodabottle',
+    'sofa',
+    'stair',
+    'stairs',
+    'staticmeshactor',
+    'storagerack',
+    'streetlight',
+    'supportarch',
+    'supportbeam',
+    'supportcolumn',
+    'table',
+    'tireassembly',
+    'toolbox',
+    'trashcan',
+    'tree',
+    'tunnel',
+    'tv',
+    'vendingmachine',
+    'vent',
+    'ventilationgrill',
+    'ventpipe',
+    'vine',
+    'walkway',
+    'wall',
+    'wallarch',
+    'wallarchway',
+    'walllight',
+    'walls',
+    'window',
+    'windowframe',
+    'woodenbox',
+    'woodenpallet',
+    'woodenplank',
+    'free',
+]
+occ_names = [
+    'others',
+    'acousticceiling',
+    'airconditiongvent',
+    'atm',
+    'awning',
+    'bakerycounter',
+    'bannersign',
+    'barcounter',
+    'barrel',
+    'barshelf',
+    'beam',
+    'bed',
+    'bench',
+    'bleach',
+    'blinds',
+    'boatcovered',
+    'book',
+    'boxedfood',
+    'boxedlaundrydetergent',
+    'bp',
+    'building',
+    'buildingtunnel',
+    'cabinet',
+    'cabinets',
+    'cable',
+    'cabledrum',
+    'cameraactor',
+    'car',
+    'carpet',
+    'cashregister',
+    'ceiling',
+    'cementcolumn',
+    'chain',
+    'chair',
+    'chairs',
+    'chasis',
+    'childactor',
+    'chipscylinder',
+    'cieling',
+    'cleaningpowder',
+    'column',
+    'concretebarricade',
+    'couch',
+    'counch',
+    'cranerail',
+    'cucumbers',
+    'cupboard',
+    'curtain',
+    'decorativecookiebox',
+    'desk',
+    'donuts',
+    'door',
+    'doorway',
+    'dumpster',
+    'elevator',
+    'elevatordoor',
+    'fabricsoftener',
+    'fence',
+    'fencecolumn',
+    'floor',
+    'flowerpot',
+    'fluorescentlight',
+    'foldingscreen',
+    'frozenfoodbagged',
+    'fryingoil',
+    'garagedoor',
+    'garbagecan',
+    'gate',
+    'grass',
+    'ground',
+    'handtruck',
+    'heater',
+    'instancedfoliageactor',
+    'ivy',
+    'laboratorytable',
+    'lamp',
+    'largeconduit',
+    'light',
+    'lightbulbstring',
+    'meatchub',
+    'metalcieling',
+    'metalfloor',
+    'metalhandrail',
+    'metalpanel',
+    'metalpillar',
+    'metalplatform',
+    'metalpole',
+    'metalramp',
+    'metalstair',
+    'metalsupport',
+    'metaltop',
+    'mirror',
+    'monitor',
+    'oranges',
+    'overheadcrane',
+    'painting',
+    'papertowels',
+    'petfoodtub',
+    'piano',
+    'picture',
+    'pictureframe',
+    'pillar',
+    'pipe',
+    'plant',
+    'plantholder',
+    'platform',
+    'post',
+    'railgatebase',
+    'railing',
+    'railtrack',
+    'railtrackend',
+    'receptiondesk',
+    'refrigerator',
+    'road',
+    'robotarm',
+    'rock',
+    'rollingcabinet',
+    'roof',
+    'rug',
+    'saucebottle',
+    'screendivider',
+    'seat',
+    'sewergrate',
+    'shampoo',
+    'shelf',
+    'shoppingbags',
+    'sidewalk',
+    'sign',
+    'sky',
+    'sodabottle',
+    'sofa',
+    'stair',
+    'stairs',
+    'staticmeshactor',
+    'storagerack',
+    'streetlight',
+    'supportarch',
+    'supportbeam',
+    'supportcolumn',
+    'table',
+    'tireassembly',
+    'toolbox',
+    'trashcan',
+    'tree',
+    'tunnel',
+    'tv',
+    'vendingmachine',
+    'vent',
+    'ventilationgrill',
+    'ventpipe',
+    'vine',
+    'walkway',
+    'wall',
+    'wallarch',
+    'wallarchway',
+    'walllight',
+    'walls',
+    'window',
+    'windowframe',
+    'woodenbox',
+    'woodenpallet',
+    'woodenplank',
+]
+occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/'
+optim_wrapper = dict(
+    clip_grad=dict(max_norm=35, norm_type=2),
+    loss_scale=512.0,
+    optimizer=dict(lr=0.0002, type='AdamW', weight_decay=0.01),
+    paramwise_cfg=dict(
+        custom_keys=dict(
+            img_backbone=dict(lr_mult=0.1), sampling_offset=dict(
+                lr_mult=0.1))),
+    type='AmpOptimWrapper')
+optimizer = dict(lr=0.0002, type='AdamW', weight_decay=0.01)
+param_scheduler = [
+    dict(
+        begin=0,
+        by_epoch=False,
+        end=500,
+        start_factor=0.3333333333333333,
+        type='LinearLR'),
+    dict(
+        T_max=100,
+        begin=0,
+        by_epoch=True,
+        end=100,
+        eta_min=2.0000000000000002e-07,
+        type='CosineAnnealingLR'),
+]
+point_cloud_range = [
+    -20.0,
+    -20.0,
+    -3.0,
+    20.0,
+    20.0,
+    5.0,
+]
+randomness = dict(deterministic=False, seed=0)
+rare_classes = [
+    13,
+    26,
+    50,
+    65,
+    76,
+    140,
+    134,
+    112,
+    56,
+    39,
+    32,
+    5,
+    29,
+    55,
+    19,
+    96,
+    37,
+    66,
+    106,
+    129,
+    53,
+    61,
+    23,
+    92,
+]
+resume_from = None
+test_cfg = dict(type='TestLoop')
+test_dataloader = dict(
+    batch_size=1,
+    collate_fn=dict(type='pseudo_collate'),
+    dataset=dict(
+        ann_file='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/test.pkl',
+        classes=[
+            'car',
+            'truck',
+            'construction_vehicle',
+            'bus',
+            'trailer',
+            'barrier',
+            'motorcycle',
+            'bicycle',
+            'pedestrian',
+            'traffic_cone',
+        ],
+        data_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/',
+        dataset_cfg=dict(
+            cam_types=[
+                'CAM_LEFT',
+                'CAM_BACK',
+                'CAM_FRONT',
+                'CAM_BOTTOM',
+                'CAM_TOP',
+                'CAM_RIGHT',
+            ],
+            class_names=[
+                'others',
+                'acousticceiling',
+                'airconditiongvent',
+                'atm',
+                'awning',
+                'bakerycounter',
+                'bannersign',
+                'barcounter',
+                'barrel',
+                'barshelf',
+                'beam',
+                'bed',
+                'bench',
+                'bleach',
+                'blinds',
+                'boatcovered',
+                'book',
+                'boxedfood',
+                'boxedlaundrydetergent',
+                'bp',
+                'building',
+                'buildingtunnel',
+                'cabinet',
+                'cabinets',
+                'cable',
+                'cabledrum',
+                'cameraactor',
+                'car',
+                'carpet',
+                'cashregister',
+                'ceiling',
+                'cementcolumn',
+                'chain',
+                'chair',
+                'chairs',
+                'chasis',
+                'childactor',
+                'chipscylinder',
+                'cieling',
+                'cleaningpowder',
+                'column',
+                'concretebarricade',
+                'couch',
+                'counch',
+                'cranerail',
+                'cucumbers',
+                'cupboard',
+                'curtain',
+                'decorativecookiebox',
+                'desk',
+                'donuts',
+                'door',
+                'doorway',
+                'dumpster',
+                'elevator',
+                'elevatordoor',
+                'fabricsoftener',
+                'fence',
+                'fencecolumn',
+                'floor',
+                'flowerpot',
+                'fluorescentlight',
+                'foldingscreen',
+                'frozenfoodbagged',
+                'fryingoil',
+                'garagedoor',
+                'garbagecan',
+                'gate',
+                'grass',
+                'ground',
+                'handtruck',
+                'heater',
+                'instancedfoliageactor',
+                'ivy',
+                'laboratorytable',
+                'lamp',
+                'largeconduit',
+                'light',
+                'lightbulbstring',
+                'meatchub',
+                'metalcieling',
+                'metalfloor',
+                'metalhandrail',
+                'metalpanel',
+                'metalpillar',
+                'metalplatform',
+                'metalpole',
+                'metalramp',
+                'metalstair',
+                'metalsupport',
+                'metaltop',
+                'mirror',
+                'monitor',
+                'oranges',
+                'overheadcrane',
+                'painting',
+                'papertowels',
+                'petfoodtub',
+                'piano',
+                'picture',
+                'pictureframe',
+                'pillar',
+                'pipe',
+                'plant',
+                'plantholder',
+                'platform',
+                'post',
+                'railgatebase',
+                'railing',
+                'railtrack',
+                'railtrackend',
+                'receptiondesk',
+                'refrigerator',
+                'road',
+                'robotarm',
+                'rock',
+                'rollingcabinet',
+                'roof',
+                'rug',
+                'saucebottle',
+                'screendivider',
+                'seat',
+                'sewergrate',
+                'shampoo',
+                'shelf',
+                'shoppingbags',
+                'sidewalk',
+                'sign',
+                'sky',
+                'sodabottle',
+                'sofa',
+                'stair',
+                'stairs',
+                'staticmeshactor',
+                'storagerack',
+                'streetlight',
+                'supportarch',
+                'supportbeam',
+                'supportcolumn',
+                'table',
+                'tireassembly',
+                'toolbox',
+                'trashcan',
+                'tree',
+                'tunnel',
+                'tv',
+                'vendingmachine',
+                'vent',
+                'ventilationgrill',
+                'ventpipe',
+                'vine',
+                'walkway',
+                'wall',
+                'wallarch',
+                'wallarchway',
+                'walllight',
+                'walls',
+                'window',
+                'windowframe',
+                'woodenbox',
+                'woodenpallet',
+                'woodenplank',
+                'free',
+            ],
+            empty_label=162,
+            num_views=6,
+            occ_io=dict(
+                mask_camera_key='mask_camera',
+                mask_lidar_key='mask_lidar',
+                path_template='{scene_name}/{token}/labels.npz',
+                semantics_key='semantics'),
+            pc_range=[
+                -20.0,
+                -20.0,
+                -3.0,
+                20.0,
+                20.0,
+                5.0,
+            ],
+            ray=dict(
+                lidar=dict(
+                    azimuth_step_deg=1.0,
+                    mode='nuscenes_default',
+                    pitch_angles=None),
+                max_origins=8,
+                num_workers=8,
+                origin_xy_bound=39.0),
+            voxel_size=[
+                0.05,
+                0.05,
+                0.05,
+            ]),
+        modality=dict(
+            use_camera=True,
+            use_external=True,
+            use_lidar=False,
+            use_map=False,
+            use_radar=False),
+        occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+        pipeline=[
+            dict(
+                color_type='color',
+                imdecode_backend='pillow',
+                to_float32=False,
+                type='LoadMultiViewImageFromFiles'),
+            dict(
+                cam_types=[
+                    'CAM_LEFT',
+                    'CAM_BACK',
+                    'CAM_FRONT',
+                    'CAM_BOTTOM',
+                    'CAM_TOP',
+                    'CAM_RIGHT',
+                ],
+                imdecode_backend='pillow',
+                sweeps_num=8,
+                test_mode=True,
+                type='LoadMultiViewImageFromMultiSweeps'),
+            dict(
+                ida_aug_conf=dict(
+                    H=640,
+                    W=640,
+                    bot_pct_lim=(
+                        0.0,
+                        0.0,
+                    ),
+                    final_dim=(
+                        640,
+                        640,
+                    ),
+                    rand_flip=True,
+                    resize_lim=(
+                        1.0,
+                        1.0,
+                    ),
+                    rot_lim=(
+                        0.0,
+                        0.0,
+                    )),
+                training=False,
+                type='RandomTransformImage'),
+            dict(
+                meta_keys=(
+                    'sample_idx',
+                    'sample_token',
+                    'scene_name',
+                    'filename',
+                    'ori_shape',
+                    'img_shape',
+                    'pad_shape',
+                    'ego2occ',
+                    'ego2img',
+                    'ego2lidar',
+                    'img_timestamp',
+                ),
+                type='PackOcc3DInputs'),
+        ],
+        test_mode=True,
+        type='TartangroundOcc3DDataset'),
+    num_workers=0,
+    persistent_workers=False,
+    sampler=dict(shuffle=False, type='DefaultSampler'))
+test_evaluator = dict(
+    ann_file='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/test.pkl',
+    class_names=[
+        'others',
+        'acousticceiling',
+        'airconditiongvent',
+        'atm',
+        'awning',
+        'bakerycounter',
+        'bannersign',
+        'barcounter',
+        'barrel',
+        'barshelf',
+        'beam',
+        'bed',
+        'bench',
+        'bleach',
+        'blinds',
+        'boatcovered',
+        'book',
+        'boxedfood',
+        'boxedlaundrydetergent',
+        'bp',
+        'building',
+        'buildingtunnel',
+        'cabinet',
+        'cabinets',
+        'cable',
+        'cabledrum',
+        'cameraactor',
+        'car',
+        'carpet',
+        'cashregister',
+        'ceiling',
+        'cementcolumn',
+        'chain',
+        'chair',
+        'chairs',
+        'chasis',
+        'childactor',
+        'chipscylinder',
+        'cieling',
+        'cleaningpowder',
+        'column',
+        'concretebarricade',
+        'couch',
+        'counch',
+        'cranerail',
+        'cucumbers',
+        'cupboard',
+        'curtain',
+        'decorativecookiebox',
+        'desk',
+        'donuts',
+        'door',
+        'doorway',
+        'dumpster',
+        'elevator',
+        'elevatordoor',
+        'fabricsoftener',
+        'fence',
+        'fencecolumn',
+        'floor',
+        'flowerpot',
+        'fluorescentlight',
+        'foldingscreen',
+        'frozenfoodbagged',
+        'fryingoil',
+        'garagedoor',
+        'garbagecan',
+        'gate',
+        'grass',
+        'ground',
+        'handtruck',
+        'heater',
+        'instancedfoliageactor',
+        'ivy',
+        'laboratorytable',
+        'lamp',
+        'largeconduit',
+        'light',
+        'lightbulbstring',
+        'meatchub',
+        'metalcieling',
+        'metalfloor',
+        'metalhandrail',
+        'metalpanel',
+        'metalpillar',
+        'metalplatform',
+        'metalpole',
+        'metalramp',
+        'metalstair',
+        'metalsupport',
+        'metaltop',
+        'mirror',
+        'monitor',
+        'oranges',
+        'overheadcrane',
+        'painting',
+        'papertowels',
+        'petfoodtub',
+        'piano',
+        'picture',
+        'pictureframe',
+        'pillar',
+        'pipe',
+        'plant',
+        'plantholder',
+        'platform',
+        'post',
+        'railgatebase',
+        'railing',
+        'railtrack',
+        'railtrackend',
+        'receptiondesk',
+        'refrigerator',
+        'road',
+        'robotarm',
+        'rock',
+        'rollingcabinet',
+        'roof',
+        'rug',
+        'saucebottle',
+        'screendivider',
+        'seat',
+        'sewergrate',
+        'shampoo',
+        'shelf',
+        'shoppingbags',
+        'sidewalk',
+        'sign',
+        'sky',
+        'sodabottle',
+        'sofa',
+        'stair',
+        'stairs',
+        'staticmeshactor',
+        'storagerack',
+        'streetlight',
+        'supportarch',
+        'supportbeam',
+        'supportcolumn',
+        'table',
+        'tireassembly',
+        'toolbox',
+        'trashcan',
+        'tree',
+        'tunnel',
+        'tv',
+        'vendingmachine',
+        'vent',
+        'ventilationgrill',
+        'ventpipe',
+        'vine',
+        'walkway',
+        'wall',
+        'wallarch',
+        'wallarchway',
+        'walllight',
+        'walls',
+        'window',
+        'windowframe',
+        'woodenbox',
+        'woodenpallet',
+        'woodenplank',
+        'free',
+    ],
+    empty_label=162,
+    focus_eval=dict(
+        ema_momentum=0.9,
+        enabled=True,
+        fallback='rare_classes',
+        freq_thr=0.02,
+        max_classes=24,
+        min_classes=8,
+        policy='ema_freq',
+        rare_classes=[
+            13,
+            26,
+            50,
+            65,
+            76,
+            140,
+            134,
+            112,
+            56,
+            39,
+            32,
+            5,
+            29,
+            55,
+            19,
+            96,
+            37,
+            66,
+            106,
+            129,
+            53,
+            61,
+            23,
+            92,
+        ]),
+    mask_camera_key='mask_camera',
+    mask_lidar_key='mask_lidar',
+    miou_num_workers=32,
+    occ_path_template='{scene_name}/{token}/labels.npz',
+    occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+    pc_range=[
+        -20.0,
+        -20.0,
+        -3.0,
+        20.0,
+        20.0,
+        5.0,
+    ],
+    semantics_key='semantics',
+    type='Occ3DMetric',
+    use_camera_mask=True,
+    voxel_size=[
+        0.05,
+        0.05,
+        0.05,
+    ])
+test_pipeline = [
+    dict(
+        color_type='color',
+        imdecode_backend='pillow',
+        to_float32=False,
+        type='LoadMultiViewImageFromFiles'),
+    dict(
+        cam_types=[
+            'CAM_LEFT',
+            'CAM_BACK',
+            'CAM_FRONT',
+            'CAM_BOTTOM',
+            'CAM_TOP',
+            'CAM_RIGHT',
+        ],
+        imdecode_backend='pillow',
+        sweeps_num=8,
+        test_mode=True,
+        type='LoadMultiViewImageFromMultiSweeps'),
+    dict(
+        ida_aug_conf=dict(
+            H=640,
+            W=640,
+            bot_pct_lim=(
+                0.0,
+                0.0,
+            ),
+            final_dim=(
+                640,
+                640,
+            ),
+            rand_flip=True,
+            resize_lim=(
+                1.0,
+                1.0,
+            ),
+            rot_lim=(
+                0.0,
+                0.0,
+            )),
+        training=False,
+        type='RandomTransformImage'),
+    dict(
+        meta_keys=(
+            'sample_idx',
+            'sample_token',
+            'scene_name',
+            'filename',
+            'ori_shape',
+            'img_shape',
+            'pad_shape',
+            'ego2occ',
+            'ego2img',
+            'ego2lidar',
+            'img_timestamp',
+        ),
+        type='PackOcc3DInputs'),
+]
+total_epochs = 100
+train_cfg = dict(max_epochs=100, type='EpochBasedTrainLoop', val_interval=10)
+train_dataloader = dict(
+    batch_size=1,
+    collate_fn=dict(type='pseudo_collate'),
+    dataset=dict(
+        ann_file='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/train.pkl',
+        classes=[
+            'car',
+            'truck',
+            'construction_vehicle',
+            'bus',
+            'trailer',
+            'barrier',
+            'motorcycle',
+            'bicycle',
+            'pedestrian',
+            'traffic_cone',
+        ],
+        data_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/',
+        dataset_cfg=dict(
+            cam_types=[
+                'CAM_LEFT',
+                'CAM_BACK',
+                'CAM_FRONT',
+                'CAM_BOTTOM',
+                'CAM_TOP',
+                'CAM_RIGHT',
+            ],
+            class_names=[
+                'others',
+                'acousticceiling',
+                'airconditiongvent',
+                'atm',
+                'awning',
+                'bakerycounter',
+                'bannersign',
+                'barcounter',
+                'barrel',
+                'barshelf',
+                'beam',
+                'bed',
+                'bench',
+                'bleach',
+                'blinds',
+                'boatcovered',
+                'book',
+                'boxedfood',
+                'boxedlaundrydetergent',
+                'bp',
+                'building',
+                'buildingtunnel',
+                'cabinet',
+                'cabinets',
+                'cable',
+                'cabledrum',
+                'cameraactor',
+                'car',
+                'carpet',
+                'cashregister',
+                'ceiling',
+                'cementcolumn',
+                'chain',
+                'chair',
+                'chairs',
+                'chasis',
+                'childactor',
+                'chipscylinder',
+                'cieling',
+                'cleaningpowder',
+                'column',
+                'concretebarricade',
+                'couch',
+                'counch',
+                'cranerail',
+                'cucumbers',
+                'cupboard',
+                'curtain',
+                'decorativecookiebox',
+                'desk',
+                'donuts',
+                'door',
+                'doorway',
+                'dumpster',
+                'elevator',
+                'elevatordoor',
+                'fabricsoftener',
+                'fence',
+                'fencecolumn',
+                'floor',
+                'flowerpot',
+                'fluorescentlight',
+                'foldingscreen',
+                'frozenfoodbagged',
+                'fryingoil',
+                'garagedoor',
+                'garbagecan',
+                'gate',
+                'grass',
+                'ground',
+                'handtruck',
+                'heater',
+                'instancedfoliageactor',
+                'ivy',
+                'laboratorytable',
+                'lamp',
+                'largeconduit',
+                'light',
+                'lightbulbstring',
+                'meatchub',
+                'metalcieling',
+                'metalfloor',
+                'metalhandrail',
+                'metalpanel',
+                'metalpillar',
+                'metalplatform',
+                'metalpole',
+                'metalramp',
+                'metalstair',
+                'metalsupport',
+                'metaltop',
+                'mirror',
+                'monitor',
+                'oranges',
+                'overheadcrane',
+                'painting',
+                'papertowels',
+                'petfoodtub',
+                'piano',
+                'picture',
+                'pictureframe',
+                'pillar',
+                'pipe',
+                'plant',
+                'plantholder',
+                'platform',
+                'post',
+                'railgatebase',
+                'railing',
+                'railtrack',
+                'railtrackend',
+                'receptiondesk',
+                'refrigerator',
+                'road',
+                'robotarm',
+                'rock',
+                'rollingcabinet',
+                'roof',
+                'rug',
+                'saucebottle',
+                'screendivider',
+                'seat',
+                'sewergrate',
+                'shampoo',
+                'shelf',
+                'shoppingbags',
+                'sidewalk',
+                'sign',
+                'sky',
+                'sodabottle',
+                'sofa',
+                'stair',
+                'stairs',
+                'staticmeshactor',
+                'storagerack',
+                'streetlight',
+                'supportarch',
+                'supportbeam',
+                'supportcolumn',
+                'table',
+                'tireassembly',
+                'toolbox',
+                'trashcan',
+                'tree',
+                'tunnel',
+                'tv',
+                'vendingmachine',
+                'vent',
+                'ventilationgrill',
+                'ventpipe',
+                'vine',
+                'walkway',
+                'wall',
+                'wallarch',
+                'wallarchway',
+                'walllight',
+                'walls',
+                'window',
+                'windowframe',
+                'woodenbox',
+                'woodenpallet',
+                'woodenplank',
+                'free',
+            ],
+            empty_label=162,
+            num_views=6,
+            occ_io=dict(
+                mask_camera_key='mask_camera',
+                mask_lidar_key='mask_lidar',
+                path_template='{scene_name}/{token}/labels.npz',
+                semantics_key='semantics'),
+            pc_range=[
+                -20.0,
+                -20.0,
+                -3.0,
+                20.0,
+                20.0,
+                5.0,
+            ],
+            ray=dict(
+                lidar=dict(
+                    azimuth_step_deg=1.0,
+                    mode='nuscenes_default',
+                    pitch_angles=None),
+                max_origins=8,
+                num_workers=8,
+                origin_xy_bound=39.0),
+            voxel_size=[
+                0.05,
+                0.05,
+                0.05,
+            ]),
+        modality=dict(
+            use_camera=True,
+            use_external=True,
+            use_lidar=False,
+            use_map=False,
+            use_radar=False),
+        occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+        pipeline=[
+            dict(
+                color_type='color',
+                imdecode_backend='pillow',
+                to_float32=False,
+                type='LoadMultiViewImageFromFiles'),
+            dict(
+                cam_types=[
+                    'CAM_LEFT',
+                    'CAM_BACK',
+                    'CAM_FRONT',
+                    'CAM_BOTTOM',
+                    'CAM_TOP',
+                    'CAM_RIGHT',
+                ],
+                imdecode_backend='pillow',
+                sweeps_num=8,
+                type='LoadMultiViewImageFromMultiSweeps'),
+            dict(
+                class_names=[
+                    'others',
+                    'acousticceiling',
+                    'airconditiongvent',
+                    'atm',
+                    'awning',
+                    'bakerycounter',
+                    'bannersign',
+                    'barcounter',
+                    'barrel',
+                    'barshelf',
+                    'beam',
+                    'bed',
+                    'bench',
+                    'bleach',
+                    'blinds',
+                    'boatcovered',
+                    'book',
+                    'boxedfood',
+                    'boxedlaundrydetergent',
+                    'bp',
+                    'building',
+                    'buildingtunnel',
+                    'cabinet',
+                    'cabinets',
+                    'cable',
+                    'cabledrum',
+                    'cameraactor',
+                    'car',
+                    'carpet',
+                    'cashregister',
+                    'ceiling',
+                    'cementcolumn',
+                    'chain',
+                    'chair',
+                    'chairs',
+                    'chasis',
+                    'childactor',
+                    'chipscylinder',
+                    'cieling',
+                    'cleaningpowder',
+                    'column',
+                    'concretebarricade',
+                    'couch',
+                    'counch',
+                    'cranerail',
+                    'cucumbers',
+                    'cupboard',
+                    'curtain',
+                    'decorativecookiebox',
+                    'desk',
+                    'donuts',
+                    'door',
+                    'doorway',
+                    'dumpster',
+                    'elevator',
+                    'elevatordoor',
+                    'fabricsoftener',
+                    'fence',
+                    'fencecolumn',
+                    'floor',
+                    'flowerpot',
+                    'fluorescentlight',
+                    'foldingscreen',
+                    'frozenfoodbagged',
+                    'fryingoil',
+                    'garagedoor',
+                    'garbagecan',
+                    'gate',
+                    'grass',
+                    'ground',
+                    'handtruck',
+                    'heater',
+                    'instancedfoliageactor',
+                    'ivy',
+                    'laboratorytable',
+                    'lamp',
+                    'largeconduit',
+                    'light',
+                    'lightbulbstring',
+                    'meatchub',
+                    'metalcieling',
+                    'metalfloor',
+                    'metalhandrail',
+                    'metalpanel',
+                    'metalpillar',
+                    'metalplatform',
+                    'metalpole',
+                    'metalramp',
+                    'metalstair',
+                    'metalsupport',
+                    'metaltop',
+                    'mirror',
+                    'monitor',
+                    'oranges',
+                    'overheadcrane',
+                    'painting',
+                    'papertowels',
+                    'petfoodtub',
+                    'piano',
+                    'picture',
+                    'pictureframe',
+                    'pillar',
+                    'pipe',
+                    'plant',
+                    'plantholder',
+                    'platform',
+                    'post',
+                    'railgatebase',
+                    'railing',
+                    'railtrack',
+                    'railtrackend',
+                    'receptiondesk',
+                    'refrigerator',
+                    'road',
+                    'robotarm',
+                    'rock',
+                    'rollingcabinet',
+                    'roof',
+                    'rug',
+                    'saucebottle',
+                    'screendivider',
+                    'seat',
+                    'sewergrate',
+                    'shampoo',
+                    'shelf',
+                    'shoppingbags',
+                    'sidewalk',
+                    'sign',
+                    'sky',
+                    'sodabottle',
+                    'sofa',
+                    'stair',
+                    'stairs',
+                    'staticmeshactor',
+                    'storagerack',
+                    'streetlight',
+                    'supportarch',
+                    'supportbeam',
+                    'supportcolumn',
+                    'table',
+                    'tireassembly',
+                    'toolbox',
+                    'trashcan',
+                    'tree',
+                    'tunnel',
+                    'tv',
+                    'vendingmachine',
+                    'vent',
+                    'ventilationgrill',
+                    'ventpipe',
+                    'vine',
+                    'walkway',
+                    'wall',
+                    'wallarch',
+                    'wallarchway',
+                    'walllight',
+                    'walls',
+                    'window',
+                    'windowframe',
+                    'woodenbox',
+                    'woodenpallet',
+                    'woodenplank',
+                    'free',
+                ],
+                empty_label=162,
+                mask_camera_key='mask_camera',
+                mask_lidar_key='mask_lidar',
+                occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+                path_template='{scene_name}/{token}/labels.npz',
+                semantics_key='semantics',
+                type='LoadOcc3DFromFile'),
+            dict(
+                ida_aug_conf=dict(
+                    H=640,
+                    W=640,
+                    bot_pct_lim=(
+                        0.0,
+                        0.0,
+                    ),
+                    final_dim=(
+                        640,
+                        640,
+                    ),
+                    rand_flip=True,
+                    resize_lim=(
+                        1.0,
+                        1.0,
+                    ),
+                    rot_lim=(
+                        0.0,
+                        0.0,
+                    )),
+                training=True,
+                type='RandomTransformImage'),
+            dict(
+                bda_aug_conf=dict(flip_dx_ratio=0.5, flip_dy_ratio=0.5),
+                empty_label=162,
+                type='RandomTransformOcc'),
+            dict(
+                meta_keys=(
+                    'sample_idx',
+                    'sample_token',
+                    'scene_name',
+                    'filename',
+                    'ori_shape',
+                    'img_shape',
+                    'pad_shape',
+                    'ego2occ',
+                    'ego2img',
+                    'ego2lidar',
+                    'img_timestamp',
+                ),
+                type='PackOcc3DInputs'),
+        ],
+        test_mode=False,
+        type='TartangroundOcc3DDataset'),
+    num_workers=0,
+    persistent_workers=False,
+    sampler=dict(shuffle=True, type='DefaultSampler'))
+train_pipeline = [
+    dict(
+        color_type='color',
+        imdecode_backend='pillow',
+        to_float32=False,
+        type='LoadMultiViewImageFromFiles'),
+    dict(
+        cam_types=[
+            'CAM_LEFT',
+            'CAM_BACK',
+            'CAM_FRONT',
+            'CAM_BOTTOM',
+            'CAM_TOP',
+            'CAM_RIGHT',
+        ],
+        imdecode_backend='pillow',
+        sweeps_num=8,
+        type='LoadMultiViewImageFromMultiSweeps'),
+    dict(
+        class_names=[
+            'others',
+            'acousticceiling',
+            'airconditiongvent',
+            'atm',
+            'awning',
+            'bakerycounter',
+            'bannersign',
+            'barcounter',
+            'barrel',
+            'barshelf',
+            'beam',
+            'bed',
+            'bench',
+            'bleach',
+            'blinds',
+            'boatcovered',
+            'book',
+            'boxedfood',
+            'boxedlaundrydetergent',
+            'bp',
+            'building',
+            'buildingtunnel',
+            'cabinet',
+            'cabinets',
+            'cable',
+            'cabledrum',
+            'cameraactor',
+            'car',
+            'carpet',
+            'cashregister',
+            'ceiling',
+            'cementcolumn',
+            'chain',
+            'chair',
+            'chairs',
+            'chasis',
+            'childactor',
+            'chipscylinder',
+            'cieling',
+            'cleaningpowder',
+            'column',
+            'concretebarricade',
+            'couch',
+            'counch',
+            'cranerail',
+            'cucumbers',
+            'cupboard',
+            'curtain',
+            'decorativecookiebox',
+            'desk',
+            'donuts',
+            'door',
+            'doorway',
+            'dumpster',
+            'elevator',
+            'elevatordoor',
+            'fabricsoftener',
+            'fence',
+            'fencecolumn',
+            'floor',
+            'flowerpot',
+            'fluorescentlight',
+            'foldingscreen',
+            'frozenfoodbagged',
+            'fryingoil',
+            'garagedoor',
+            'garbagecan',
+            'gate',
+            'grass',
+            'ground',
+            'handtruck',
+            'heater',
+            'instancedfoliageactor',
+            'ivy',
+            'laboratorytable',
+            'lamp',
+            'largeconduit',
+            'light',
+            'lightbulbstring',
+            'meatchub',
+            'metalcieling',
+            'metalfloor',
+            'metalhandrail',
+            'metalpanel',
+            'metalpillar',
+            'metalplatform',
+            'metalpole',
+            'metalramp',
+            'metalstair',
+            'metalsupport',
+            'metaltop',
+            'mirror',
+            'monitor',
+            'oranges',
+            'overheadcrane',
+            'painting',
+            'papertowels',
+            'petfoodtub',
+            'piano',
+            'picture',
+            'pictureframe',
+            'pillar',
+            'pipe',
+            'plant',
+            'plantholder',
+            'platform',
+            'post',
+            'railgatebase',
+            'railing',
+            'railtrack',
+            'railtrackend',
+            'receptiondesk',
+            'refrigerator',
+            'road',
+            'robotarm',
+            'rock',
+            'rollingcabinet',
+            'roof',
+            'rug',
+            'saucebottle',
+            'screendivider',
+            'seat',
+            'sewergrate',
+            'shampoo',
+            'shelf',
+            'shoppingbags',
+            'sidewalk',
+            'sign',
+            'sky',
+            'sodabottle',
+            'sofa',
+            'stair',
+            'stairs',
+            'staticmeshactor',
+            'storagerack',
+            'streetlight',
+            'supportarch',
+            'supportbeam',
+            'supportcolumn',
+            'table',
+            'tireassembly',
+            'toolbox',
+            'trashcan',
+            'tree',
+            'tunnel',
+            'tv',
+            'vendingmachine',
+            'vent',
+            'ventilationgrill',
+            'ventpipe',
+            'vine',
+            'walkway',
+            'wall',
+            'wallarch',
+            'wallarchway',
+            'walllight',
+            'walls',
+            'window',
+            'windowframe',
+            'woodenbox',
+            'woodenpallet',
+            'woodenplank',
+            'free',
+        ],
+        empty_label=162,
+        mask_camera_key='mask_camera',
+        mask_lidar_key='mask_lidar',
+        occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+        path_template='{scene_name}/{token}/labels.npz',
+        semantics_key='semantics',
+        type='LoadOcc3DFromFile'),
+    dict(
+        ida_aug_conf=dict(
+            H=640,
+            W=640,
+            bot_pct_lim=(
+                0.0,
+                0.0,
+            ),
+            final_dim=(
+                640,
+                640,
+            ),
+            rand_flip=True,
+            resize_lim=(
+                1.0,
+                1.0,
+            ),
+            rot_lim=(
+                0.0,
+                0.0,
+            )),
+        training=True,
+        type='RandomTransformImage'),
+    dict(
+        bda_aug_conf=dict(flip_dx_ratio=0.5, flip_dy_ratio=0.5),
+        empty_label=162,
+        type='RandomTransformOcc'),
+    dict(
+        meta_keys=(
+            'sample_idx',
+            'sample_token',
+            'scene_name',
+            'filename',
+            'ori_shape',
+            'img_shape',
+            'pad_shape',
+            'ego2occ',
+            'ego2img',
+            'ego2lidar',
+            'img_timestamp',
+        ),
+        type='PackOcc3DInputs'),
+]
+val_cfg = dict(type='ValLoop')
+val_dataloader = dict(
+    batch_size=1,
+    collate_fn=dict(type='pseudo_collate'),
+    dataset=dict(
+        ann_file='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/val.pkl',
+        classes=[
+            'car',
+            'truck',
+            'construction_vehicle',
+            'bus',
+            'trailer',
+            'barrier',
+            'motorcycle',
+            'bicycle',
+            'pedestrian',
+            'traffic_cone',
+        ],
+        data_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/',
+        dataset_cfg=dict(
+            cam_types=[
+                'CAM_LEFT',
+                'CAM_BACK',
+                'CAM_FRONT',
+                'CAM_BOTTOM',
+                'CAM_TOP',
+                'CAM_RIGHT',
+            ],
+            class_names=[
+                'others',
+                'acousticceiling',
+                'airconditiongvent',
+                'atm',
+                'awning',
+                'bakerycounter',
+                'bannersign',
+                'barcounter',
+                'barrel',
+                'barshelf',
+                'beam',
+                'bed',
+                'bench',
+                'bleach',
+                'blinds',
+                'boatcovered',
+                'book',
+                'boxedfood',
+                'boxedlaundrydetergent',
+                'bp',
+                'building',
+                'buildingtunnel',
+                'cabinet',
+                'cabinets',
+                'cable',
+                'cabledrum',
+                'cameraactor',
+                'car',
+                'carpet',
+                'cashregister',
+                'ceiling',
+                'cementcolumn',
+                'chain',
+                'chair',
+                'chairs',
+                'chasis',
+                'childactor',
+                'chipscylinder',
+                'cieling',
+                'cleaningpowder',
+                'column',
+                'concretebarricade',
+                'couch',
+                'counch',
+                'cranerail',
+                'cucumbers',
+                'cupboard',
+                'curtain',
+                'decorativecookiebox',
+                'desk',
+                'donuts',
+                'door',
+                'doorway',
+                'dumpster',
+                'elevator',
+                'elevatordoor',
+                'fabricsoftener',
+                'fence',
+                'fencecolumn',
+                'floor',
+                'flowerpot',
+                'fluorescentlight',
+                'foldingscreen',
+                'frozenfoodbagged',
+                'fryingoil',
+                'garagedoor',
+                'garbagecan',
+                'gate',
+                'grass',
+                'ground',
+                'handtruck',
+                'heater',
+                'instancedfoliageactor',
+                'ivy',
+                'laboratorytable',
+                'lamp',
+                'largeconduit',
+                'light',
+                'lightbulbstring',
+                'meatchub',
+                'metalcieling',
+                'metalfloor',
+                'metalhandrail',
+                'metalpanel',
+                'metalpillar',
+                'metalplatform',
+                'metalpole',
+                'metalramp',
+                'metalstair',
+                'metalsupport',
+                'metaltop',
+                'mirror',
+                'monitor',
+                'oranges',
+                'overheadcrane',
+                'painting',
+                'papertowels',
+                'petfoodtub',
+                'piano',
+                'picture',
+                'pictureframe',
+                'pillar',
+                'pipe',
+                'plant',
+                'plantholder',
+                'platform',
+                'post',
+                'railgatebase',
+                'railing',
+                'railtrack',
+                'railtrackend',
+                'receptiondesk',
+                'refrigerator',
+                'road',
+                'robotarm',
+                'rock',
+                'rollingcabinet',
+                'roof',
+                'rug',
+                'saucebottle',
+                'screendivider',
+                'seat',
+                'sewergrate',
+                'shampoo',
+                'shelf',
+                'shoppingbags',
+                'sidewalk',
+                'sign',
+                'sky',
+                'sodabottle',
+                'sofa',
+                'stair',
+                'stairs',
+                'staticmeshactor',
+                'storagerack',
+                'streetlight',
+                'supportarch',
+                'supportbeam',
+                'supportcolumn',
+                'table',
+                'tireassembly',
+                'toolbox',
+                'trashcan',
+                'tree',
+                'tunnel',
+                'tv',
+                'vendingmachine',
+                'vent',
+                'ventilationgrill',
+                'ventpipe',
+                'vine',
+                'walkway',
+                'wall',
+                'wallarch',
+                'wallarchway',
+                'walllight',
+                'walls',
+                'window',
+                'windowframe',
+                'woodenbox',
+                'woodenpallet',
+                'woodenplank',
+                'free',
+            ],
+            empty_label=162,
+            num_views=6,
+            occ_io=dict(
+                mask_camera_key='mask_camera',
+                mask_lidar_key='mask_lidar',
+                path_template='{scene_name}/{token}/labels.npz',
+                semantics_key='semantics'),
+            pc_range=[
+                -20.0,
+                -20.0,
+                -3.0,
+                20.0,
+                20.0,
+                5.0,
+            ],
+            ray=dict(
+                lidar=dict(
+                    azimuth_step_deg=1.0,
+                    mode='nuscenes_default',
+                    pitch_angles=None),
+                max_origins=8,
+                num_workers=8,
+                origin_xy_bound=39.0),
+            voxel_size=[
+                0.05,
+                0.05,
+                0.05,
+            ]),
+        modality=dict(
+            use_camera=True,
+            use_external=True,
+            use_lidar=False,
+            use_map=False,
+            use_radar=False),
+        occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+        pipeline=[
+            dict(
+                color_type='color',
+                imdecode_backend='pillow',
+                to_float32=False,
+                type='LoadMultiViewImageFromFiles'),
+            dict(
+                cam_types=[
+                    'CAM_LEFT',
+                    'CAM_BACK',
+                    'CAM_FRONT',
+                    'CAM_BOTTOM',
+                    'CAM_TOP',
+                    'CAM_RIGHT',
+                ],
+                imdecode_backend='pillow',
+                sweeps_num=8,
+                test_mode=True,
+                type='LoadMultiViewImageFromMultiSweeps'),
+            dict(
+                ida_aug_conf=dict(
+                    H=640,
+                    W=640,
+                    bot_pct_lim=(
+                        0.0,
+                        0.0,
+                    ),
+                    final_dim=(
+                        640,
+                        640,
+                    ),
+                    rand_flip=True,
+                    resize_lim=(
+                        1.0,
+                        1.0,
+                    ),
+                    rot_lim=(
+                        0.0,
+                        0.0,
+                    )),
+                training=False,
+                type='RandomTransformImage'),
+            dict(
+                meta_keys=(
+                    'sample_idx',
+                    'sample_token',
+                    'scene_name',
+                    'filename',
+                    'ori_shape',
+                    'img_shape',
+                    'pad_shape',
+                    'ego2occ',
+                    'ego2img',
+                    'ego2lidar',
+                    'img_timestamp',
+                ),
+                type='PackOcc3DInputs'),
+        ],
+        test_mode=True,
+        type='TartangroundOcc3DDataset'),
+    num_workers=0,
+    persistent_workers=False,
+    sampler=dict(shuffle=False, type='DefaultSampler'))
+val_evaluator = dict(
+    ann_file='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/val.pkl',
+    class_names=[
+        'others',
+        'acousticceiling',
+        'airconditiongvent',
+        'atm',
+        'awning',
+        'bakerycounter',
+        'bannersign',
+        'barcounter',
+        'barrel',
+        'barshelf',
+        'beam',
+        'bed',
+        'bench',
+        'bleach',
+        'blinds',
+        'boatcovered',
+        'book',
+        'boxedfood',
+        'boxedlaundrydetergent',
+        'bp',
+        'building',
+        'buildingtunnel',
+        'cabinet',
+        'cabinets',
+        'cable',
+        'cabledrum',
+        'cameraactor',
+        'car',
+        'carpet',
+        'cashregister',
+        'ceiling',
+        'cementcolumn',
+        'chain',
+        'chair',
+        'chairs',
+        'chasis',
+        'childactor',
+        'chipscylinder',
+        'cieling',
+        'cleaningpowder',
+        'column',
+        'concretebarricade',
+        'couch',
+        'counch',
+        'cranerail',
+        'cucumbers',
+        'cupboard',
+        'curtain',
+        'decorativecookiebox',
+        'desk',
+        'donuts',
+        'door',
+        'doorway',
+        'dumpster',
+        'elevator',
+        'elevatordoor',
+        'fabricsoftener',
+        'fence',
+        'fencecolumn',
+        'floor',
+        'flowerpot',
+        'fluorescentlight',
+        'foldingscreen',
+        'frozenfoodbagged',
+        'fryingoil',
+        'garagedoor',
+        'garbagecan',
+        'gate',
+        'grass',
+        'ground',
+        'handtruck',
+        'heater',
+        'instancedfoliageactor',
+        'ivy',
+        'laboratorytable',
+        'lamp',
+        'largeconduit',
+        'light',
+        'lightbulbstring',
+        'meatchub',
+        'metalcieling',
+        'metalfloor',
+        'metalhandrail',
+        'metalpanel',
+        'metalpillar',
+        'metalplatform',
+        'metalpole',
+        'metalramp',
+        'metalstair',
+        'metalsupport',
+        'metaltop',
+        'mirror',
+        'monitor',
+        'oranges',
+        'overheadcrane',
+        'painting',
+        'papertowels',
+        'petfoodtub',
+        'piano',
+        'picture',
+        'pictureframe',
+        'pillar',
+        'pipe',
+        'plant',
+        'plantholder',
+        'platform',
+        'post',
+        'railgatebase',
+        'railing',
+        'railtrack',
+        'railtrackend',
+        'receptiondesk',
+        'refrigerator',
+        'road',
+        'robotarm',
+        'rock',
+        'rollingcabinet',
+        'roof',
+        'rug',
+        'saucebottle',
+        'screendivider',
+        'seat',
+        'sewergrate',
+        'shampoo',
+        'shelf',
+        'shoppingbags',
+        'sidewalk',
+        'sign',
+        'sky',
+        'sodabottle',
+        'sofa',
+        'stair',
+        'stairs',
+        'staticmeshactor',
+        'storagerack',
+        'streetlight',
+        'supportarch',
+        'supportbeam',
+        'supportcolumn',
+        'table',
+        'tireassembly',
+        'toolbox',
+        'trashcan',
+        'tree',
+        'tunnel',
+        'tv',
+        'vendingmachine',
+        'vent',
+        'ventilationgrill',
+        'ventpipe',
+        'vine',
+        'walkway',
+        'wall',
+        'wallarch',
+        'wallarchway',
+        'walllight',
+        'walls',
+        'window',
+        'windowframe',
+        'woodenbox',
+        'woodenpallet',
+        'woodenplank',
+        'free',
+    ],
+    empty_label=162,
+    focus_eval=dict(
+        ema_momentum=0.9,
+        enabled=True,
+        fallback='rare_classes',
+        freq_thr=0.02,
+        max_classes=24,
+        min_classes=8,
+        policy='ema_freq',
+        rare_classes=[
+            13,
+            26,
+            50,
+            65,
+            76,
+            140,
+            134,
+            112,
+            56,
+            39,
+            32,
+            5,
+            29,
+            55,
+            19,
+            96,
+            37,
+            66,
+            106,
+            129,
+            53,
+            61,
+            23,
+            92,
+        ]),
+    mask_camera_key='mask_camera',
+    mask_lidar_key='mask_lidar',
+    miou_num_workers=32,
+    occ_path_template='{scene_name}/{token}/labels.npz',
+    occ_root='/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/',
+    pc_range=[
+        -20.0,
+        -20.0,
+        -3.0,
+        20.0,
+        20.0,
+        5.0,
+    ],
+    semantics_key='semantics',
+    type='Occ3DMetric',
+    use_camera_mask=True,
+    voxel_size=[
+        0.05,
+        0.05,
+        0.05,
+    ])
+visualizer = dict(
+    type='Visualizer', vis_backends=[
+        dict(type='TensorboardVisBackend'),
+    ])
+voxel_size = [
+    0.05,
+    0.05,
+    0.05,
+]
+work_dir = '/root/wjl/OPUS_mmcv2/.tmp_grad_debug'
+
+2026/02/20 11:37:32 - mmengine - INFO - Distributed training is not used, all SyncBatchNorm (SyncBN) layers in the model will be automatically reverted to BatchNormXd layers if they are used.
+2026/02/20 11:37:32 - mmengine - INFO - Hooks will be executed in the following order:
+before_run:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+before_train:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_train_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(NORMAL      ) DistSamplerSeedHook                
+ -------------------- 
+before_train_iter:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_train_iter:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+after_train_epoch:
+(NORMAL      ) IterTimerHook                      
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_val:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+before_val_epoch:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+before_val_iter:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_val_iter:
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_val_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+(LOW         ) ParamSchedulerHook                 
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+after_val:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+after_train:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(VERY_LOW    ) CheckpointHook                     
+ -------------------- 
+before_test:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+before_test_epoch:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+before_test_iter:
+(NORMAL      ) IterTimerHook                      
+ -------------------- 
+after_test_iter:
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_test_epoch:
+(VERY_HIGH   ) RuntimeInfoHook                    
+(NORMAL      ) IterTimerHook                      
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+after_test:
+(VERY_HIGH   ) RuntimeInfoHook                    
+ -------------------- 
+after_run:
+(BELOW_NORMAL) LoggerHook                         
+ -------------------- 
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.0.sampling.sampling_offset.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.1.sampling.sampling_offset.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.2.sampling.sampling_offset.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.3.sampling.sampling_offset.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- pts_bbox_head.transformer.decoder.decoder_layers.4.sampling.sampling_offset.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.conv1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.bn1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.bn1.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.conv1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn1.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.conv2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn2.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.conv3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.bn3.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.downsample.0.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.downsample.1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.0.downsample.1.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.conv1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn1.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.conv2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn2.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.conv3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.1.bn3.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.conv1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn1.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn1.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.conv2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn2.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn2.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.conv3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn3.weight is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - WARNING - img_backbone.layer1.2.bn3.bias is skipped since its requires_grad=False
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.0.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.0.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.0.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.0.downsample.1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.1.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.2.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer2.3.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.0.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.0.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.0.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.0.downsample.1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.1.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.2.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.3.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.4.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer3.5.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.0.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.0.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.0.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.0.downsample.1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.1.bn3.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn1.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn2.bias:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.conv3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.weight:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.weight:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.weight:lr_mult=0.1
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.bias:lr=2e-05
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.bias:weight_decay=0.01
+2026/02/20 11:37:37 - mmengine - INFO - paramwise_options -- img_backbone.layer4.2.bn3.bias:lr_mult=0.1

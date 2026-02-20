@@ -109,18 +109,19 @@ dataset_cfg = dict(
 # - num_frames: temporal frames consumed by camera branch.
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
-num_layers = 6
+num_layers = 7
 num_query = 6400  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
 num_refines = [
                 1,
+                1,
+                2,
                 4,
-                4,
+                8,
                 16,
-                32,
-                64,
+                32
             ]  # Decoder point expansion per layer.
 
 img_backbone = dict(
@@ -418,7 +419,7 @@ param_scheduler = [
 ]
 
 # load pretrained weights
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=total_epochs//10)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=2)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
@@ -479,7 +480,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=5, save_last=True),
+    checkpoint=dict(type='CheckpointHook', interval=2, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

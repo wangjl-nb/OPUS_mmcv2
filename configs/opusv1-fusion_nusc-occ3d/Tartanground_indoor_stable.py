@@ -269,7 +269,7 @@ model = dict(
                 enabled=True,
                 per_class_cap=8192,  # Max GT points per class.
                 tail_min_keep=64,  # Tail classes are repeated to reach this minimum.
-                sample_mode='deterministic',  # Deterministic sampling/repeat order.
+                sample_mode='random',  # Deterministic sampling/repeat order.
             ),
 
             # Phase-1: query init mix (LiDAR FPS + random) with strict count conservation.
@@ -420,7 +420,7 @@ param_scheduler = [
 ]
 
 # load pretrained weights
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=5)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=2)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
@@ -481,7 +481,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=5, save_last=True),
+    checkpoint=dict(type='CheckpointHook', interval=2, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 
