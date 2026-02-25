@@ -1,6 +1,0 @@
-[0] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_front/000000_lcam_front.png -> view00_000000_lcam_front.png
-[1] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_left/000000_lcam_left.png -> view01_000000_lcam_left.png
-[2] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_back/000000_lcam_back.png -> view02_000000_lcam_back.png
-[3] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_right/000000_lcam_right.png -> view03_000000_lcam_right.png
-[4] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_top/000000_lcam_top.png -> view04_000000_lcam_top.png
-[5] /mnt/data/datasets/TartanGround/Hospital/Data_diff/P1000/image_lcam_bottom/000000_lcam_bottom.png -> view05_000000_lcam_bottom.png

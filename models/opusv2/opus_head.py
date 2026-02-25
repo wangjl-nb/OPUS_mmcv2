@@ -235,11 +235,29 @@ class OPUSV2Head(BaseModule):
     
     @torch.no_grad()
     def _get_regression_target_single(self, refine_pts, gt_points, gt_masks, gt_labels):
+        if gt_points.numel() == 0 or refine_pts.numel() == 0:
+            empty_idx = refine_pts.new_zeros((0,), dtype=torch.long)
+            empty_weights = refine_pts.new_zeros((0,))
+            return empty_idx, empty_idx, empty_weights
+
+        refine_pts = torch.nan_to_num(refine_pts.float()).contiguous()
+        gt_points = torch.nan_to_num(gt_points.float()).contiguous()
+        gt_masks = gt_masks.bool().contiguous()
+        gt_labels = gt_labels.long().contiguous()
+
+        num_gt = gt_points.shape[0]
+        if gt_masks.shape[0] != num_gt:
+            gt_masks = gt_masks[:num_gt]
+        if gt_labels.shape[0] != num_gt:
+            gt_labels = gt_labels[:num_gt]
+
         # knn to apply Chamfer distance
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
-        gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
+        gt_paired_idx = gt_paired_idx.permute(0, 2, 1).reshape(-1).long()
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
-        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
+        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).reshape(-1).long()
+        gt_paired_idx = gt_paired_idx.clamp(min=0, max=refine_pts.shape[0] - 1)
+        pred_paired_idx = pred_paired_idx.clamp(min=0, max=gt_points.shape[0] - 1)
         gt_paired_pts = refine_pts[gt_paired_idx]
 
         # gt side assignment
@@ -249,13 +267,18 @@ class OPUSV2Head(BaseModule):
         gt_pts_weights = refine_pts.new_ones(gt_paired_pts.shape[0])
         dist = torch.norm(gt_points - gt_paired_pts, dim=-1)
         mask = (dist > empty_dist_thr) & gt_masks
-        gt_pts_weights[mask] = empty_weights
+        if mask.any():
+            fill = gt_pts_weights.new_full(gt_pts_weights.shape, float(empty_weights))
+            gt_pts_weights = torch.where(mask, fill, gt_pts_weights)
 
         rare_classes = self.train_cfg.get('rare_classes', [0, 2, 5, 8])
         rare_weights = self.train_cfg.get('rare_weights', 10)
+        rare_floor = gt_pts_weights.new_full(gt_pts_weights.shape, float(rare_weights))
         for cls_idx in rare_classes:
             mask = (gt_labels == cls_idx) & gt_masks
-            gt_pts_weights[mask] = gt_pts_weights[mask].clamp(min=rare_weights)
+            if mask.any():
+                gt_pts_weights = torch.where(
+                    mask, torch.maximum(gt_pts_weights, rare_floor), gt_pts_weights)
 
         return gt_paired_idx, pred_paired_idx, gt_pts_weights
     
@@ -277,43 +300,62 @@ class OPUSV2Head(BaseModule):
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
         # calculate loss pts
-        gt_paired_idx_list, pred_paired_idx_list, gt_pts_weights = multi_apply(
-             self._get_regression_target_single, refine_pts_list, gt_points_list, 
-             gt_masks_list, gt_labels_list)
-        
-        gt_paired_pts, pred_paired_pts= [], []
+        valid_gt_points, gt_paired_pts, gt_pts_weights = [], [], []
+        valid_pred_pts, pred_paired_pts = [], []
         for i in range(num_imgs):
-            gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
-            pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
+            cur_gt_points = gt_points_list[i]
+            if cur_gt_points.numel() == 0:
+                continue
 
-        # concatenate all results from different samples
-        gt_pts = torch.cat(gt_points_list)
-        gt_paired_pts = torch.cat(gt_paired_pts)
-        gt_pts_weights = torch.cat(gt_pts_weights)
-        pred_pts = torch.cat(refine_pts_list)
-        pred_paired_pts = torch.cat(pred_paired_pts)
+            gt_idx, pred_idx, weights = self._get_regression_target_single(
+                refine_pts_list[i], cur_gt_points, gt_masks_list[i], gt_labels_list[i])
+            if gt_idx.numel() == 0 or pred_idx.numel() == 0:
+                continue
 
-        loss_pts = pred_pts.new_tensor(0)
-        loss_pts += self.loss_pts(gt_pts,
-                                  gt_paired_pts,
-                                  weight=gt_pts_weights[..., None],
-                                  avg_factor=gt_pts.shape[0])
-        loss_pts += self.loss_pts(pred_pts, 
-                                  pred_paired_pts,
-                                  avg_factor=pred_pts.shape[0])
+            valid_gt_points.append(cur_gt_points)
+            gt_paired_pts.append(refine_pts_list[i][gt_idx])
+            gt_pts_weights.append(weights)
+            valid_pred_pts.append(refine_pts_list[i])
+            pred_paired_pts.append(cur_gt_points[pred_idx])
+
+        loss_pts = refine_pts.new_tensor(0.)
+        if valid_gt_points:
+            gt_pts = torch.cat(valid_gt_points)
+            gt_paired_pts = torch.cat(gt_paired_pts)
+            gt_pts_weights = torch.cat(gt_pts_weights)
+            pred_pts = torch.cat(valid_pred_pts)
+            pred_paired_pts = torch.cat(pred_paired_pts)
+
+            loss_pts += self.loss_pts(gt_pts,
+                                      gt_paired_pts,
+                                      weight=gt_pts_weights[..., None],
+                                      avg_factor=gt_pts.shape[0])
+            loss_pts += self.loss_pts(pred_pts,
+                                      pred_paired_pts,
+                                      avg_factor=pred_pts.shape[0])
 
         # calculate loss cls
-        loss_cls = pred_pts.new_tensor(0)
+        loss_cls = refine_pts.new_tensor(0.)
         if (cls_scores is not None) and (voxel_coors is not None):
             # get target gt labels
-            b, x, y, z = voxel_coors.unbind(dim=-1)
+            # spconv indices are in [batch, z, y, x] order.
+            b, z, y, x = voxel_coors.unbind(dim=-1)
+            valid = (
+                (b >= 0) & (b < gt_dense_occ.shape[0]) &
+                (x >= 0) & (x < gt_dense_occ.shape[1]) &
+                (y >= 0) & (y < gt_dense_occ.shape[2]) &
+                (z >= 0) & (z < gt_dense_occ.shape[3]))
+            if not valid.all():
+                cls_scores = cls_scores[valid]
+                b, x, y, z = b[valid], x[valid], y[valid], z[valid]
             gt_labels = gt_dense_occ[b, x, y, z]
 
             # calculate cls weights
             cls_weights = self.train_cfg.get('cls_weights', [1] * self.num_classes)
             cls_weights = cls_scores.new_tensor(cls_weights)
             cls_weights = cls_weights[None, :].expand(cls_scores.shape[0], -1)
-            avg_factor = (gt_labels != self.empty_label).sum()
+            # Use prediction count as normalization for better stability.
+            avg_factor = max(int(cls_scores.shape[0]), 1)
 
             loss_cls += self.loss_cls(cls_scores,
                                       gt_labels,
@@ -389,6 +431,7 @@ class OPUSV2Head(BaseModule):
         B, W, H, Z = voxel_semantics.shape
         device = voxel_semantics.device
         voxel_semantics = voxel_semantics.long()
+        max_gt_points = int(self.train_cfg.get('max_gt_points', 0))
 
         x = torch.arange(0, W, dtype=torch.float32, device=device)
         x = (x + 0.5) / W * self.scene_size[0] + self.pc_range[0]
@@ -405,8 +448,18 @@ class OPUSV2Head(BaseModule):
         gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
             mask = voxel_semantics[i] != self.empty_label
-            gt_points.append(coors[mask])
-            gt_masks.append(mask_camera[i][mask]) # camera mask and not empty
-            gt_labels.append(voxel_semantics[i][mask])
+            points = coors[mask]
+            masks = mask_camera[i][mask]  # camera mask and not empty
+            labels = voxel_semantics[i][mask]
+
+            if max_gt_points > 0 and points.shape[0] > max_gt_points:
+                keep = torch.randperm(points.shape[0], device=device)[:max_gt_points]
+                points = points[keep]
+                masks = masks[keep]
+                labels = labels[keep]
+
+            gt_points.append(points)
+            gt_masks.append(masks)
+            gt_labels.append(labels)
         
         return gt_points, gt_masks, gt_labels

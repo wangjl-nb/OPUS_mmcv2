@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts_0.2/'
 
 input_modality = dict(
     use_lidar=True,
@@ -76,7 +76,7 @@ cls_weights = [
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
 pc_voxel_size = [0.05, 0.05, 0.05]
-voxel_size = [0.05, 0.05, 0.05]
+voxel_size = [0.2, 0.2, 0.2]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
@@ -109,19 +109,18 @@ dataset_cfg = dict(
 # - num_frames: temporal frames consumed by camera branch.
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
-num_layers = 7
-num_query = 6400  # Main occupancy query budget.
+num_layers = 6
+num_query = 4800  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
 num_refines = [
                 1,
-                1,
                 2,
-                4,
                 8,
-                16,
-                32
+                32,
+                64,
+                128,
             ]  # Decoder point expansion per layer.
 
 img_backbone = dict(

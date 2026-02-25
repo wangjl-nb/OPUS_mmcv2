@@ -170,13 +170,19 @@ model = dict(
             alpha=0.25,
             loss_weight=2.0,
         ),
-        loss_pts=dict(type='SmoothL1Loss', beta=0.2, loss_weight=0.5),
+        loss_pts=dict(
+            type='SmoothL1Loss',
+            _scope_='mmdet',
+            beta=0.2,
+            loss_weight=0.5,
+        ),
     ),
     train_cfg=dict(
         pts=dict(
             cls_weights=cls_weights,
             rare_classes=rare_classes,
             rare_weights=2,
+            max_gt_points=30000,
         )
     ),
     test_cfg=dict(pts=dict(score_thr=0.3)),
@@ -278,7 +284,8 @@ test_pipeline = [
     ),
 ]
 
-batch_size = 32
+# Global batch size. train.py will divide by world_size.
+batch_size = 8
 
 train_dataloader = dict(
     batch_size=batch_size,
@@ -340,13 +347,20 @@ test_dataloader = dict(
 optimizer = dict(type='AdamW', lr=2e-4, weight_decay=0.01)
 
 optim_wrapper = dict(
-    type='AmpOptimWrapper',
+    type='SafeAmpOptimWrapper',
     optimizer=optimizer,
     paramwise_cfg=dict(custom_keys={
         'img_backbone': dict(lr_mult=0.1),
         'sampling_offset': dict(lr_mult=0.1),
     }),
-    loss_scale=512.0,
+    dtype='bfloat16',
+    loss_scale='dynamic',
+    sanitize_nonfinite_grads=True,
+    sanitize_nan_value=0.0,
+    sanitize_posinf_value=0.0,
+    sanitize_neginf_value=0.0,
+    sanitize_grad_max_abs=1000.0,
+    log_nonfinite_stats=True,
     clip_grad=dict(max_norm=35, norm_type=2),
 )
 

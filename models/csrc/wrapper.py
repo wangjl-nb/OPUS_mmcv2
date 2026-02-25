@@ -1,5 +1,12 @@
+import os
+
 import torch
 import torch.nn.functional as F
+
+
+def _env_flag(name, default='0'):
+    value = os.getenv(name, default)
+    return str(value).strip().lower() in ('1', 'true', 'yes', 'on')
 
 try:
     from ._msmv_sampling_cuda import _ms_deform_attn_cuda_c2345_forward, _ms_deform_attn_cuda_c2345_backward
@@ -8,6 +15,10 @@ try:
 except ImportError as e:
     print('Warning: failed to load one or more CUDA extensions, performance may be hurt.')
     print('Error message:', e)
+    MSMV_CUDA = False
+
+if MSMV_CUDA and _env_flag('OPUS_DISABLE_MSMV_CUDA'):
+    print('Warning: OPUS_DISABLE_MSMV_CUDA is set; using PyTorch fallback for MSMV sampling.')
     MSMV_CUDA = False
 
 

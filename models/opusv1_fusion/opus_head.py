@@ -457,9 +457,9 @@ class OPUSV1FusionHead(BaseModule):
     def _get_target_single(self, refine_pts, gt_points, gt_masks, gt_labels, tail_class_mask=None):
         # knn to apply Chamfer distance
         gt_paired_idx = knn(1, refine_pts[None, ...], gt_points[None, ...])
-        gt_paired_idx = gt_paired_idx.permute(0, 2, 1).squeeze().long()
+        gt_paired_idx = gt_paired_idx.permute(0, 2, 1).reshape(-1).long()
         pred_paired_idx = knn(1, gt_points[None, ...], refine_pts[None, ...])
-        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).squeeze().long()
+        pred_paired_idx = pred_paired_idx.permute(0, 2, 1).reshape(-1).long()
         gt_paired_pts = refine_pts[gt_paired_idx]
         pred_paired_pts = gt_points[pred_paired_idx]
 

@@ -48,7 +48,7 @@ cls_weights = [
 
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
-point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
+point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]   # 400 * 400 *160 voxels with 0.05m resolution
 pc_voxel_size = [0.05, 0.05, 0.05]
 voxel_size = [0.05, 0.05, 0.05]
 
