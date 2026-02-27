@@ -406,7 +406,7 @@ optimizer = dict(
 )
 
 optim_wrapper = dict(
-    type="AmpOptimWrapper",
+    type="SafeAmpOptimWrapper",
     optimizer=optimizer,
     paramwise_cfg=dict(
         custom_keys={
@@ -414,8 +414,10 @@ optim_wrapper = dict(
             "sampling_offset": dict(lr_mult=0.1),
         }
     ),
-    loss_scale=512.0,
+    loss_scale=256.0,
     clip_grad=dict(max_norm=35, norm_type=2),
+    sanitize_nonfinite_grads=True,
+    log_nonfinite_stats=True,
 )
 
 # learning policy
@@ -493,7 +495,7 @@ default_hooks = dict(
     timer=dict(type="IterTimerHook"),
     logger=dict(type="LoggerHook", interval=1),
     param_scheduler=dict(type="ParamSchedulerHook"),
-    checkpoint=dict(type="CheckpointHook", interval=2, max_keep_ckpts=5, save_last=True),
+    checkpoint=dict(type="CheckpointHook", interval=5, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type="DistSamplerSeedHook"),
 )
 

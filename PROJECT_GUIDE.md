@@ -77,6 +77,14 @@ Key files:
   - `lidar_ratio`, `random_ratio` decide split
   - `random_mode` controls random sampling strategy
 - Uses FPS (`furthest_point_sample`) + optional uniform sampling in `pc_range`.
+ - 具体实现要点（`models/opusv1_fusion/opus_head.py`）：
+   - `get_init_position` 在 `torch.no_grad()` 下执行，初始化不会参与反向传播。
+   - `init_pos_lidar='curr'` 且点云含时间戳时，会先筛选当前帧（`pts[:, -1] == 0`）。
+   - `num_lidar/num_random` 由 `_resolve_query_init_mix` 决定：若 `query_init_mix.enabled=False`，则 **默认全用 LiDAR**（`num_lidar=num_query`）。
+   - LiDAR 采样：`_sample_lidar_queries` 先做 FPS，若点数不足则 **重复采样** 或 **回退到 pc_range 均匀采样**。
+   - Random 采样：`_sample_random_queries` 默认“先点云后均匀”，点云不够再用 `pc_range` 补齐。
+   - 最终若 `mixed_points` 数量 ≠ `num_query`，会 **截断或补齐**，确保 query 数严格一致。
+   - 初始化点最终通过 `encode_points` 映射到 `[0,1]` 归一化坐标（基于 `pc_range`）。
 
 ---
 
@@ -212,6 +220,7 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 - **`grad_norm` 为 NaN**：
   - 常见原因：`sampling_4d` 投影数值不稳定（AMP 下 `occ2img @ points` 溢出、除以近零深度、或 `num_views=1` 时 `i_view/(N-1)` 产生 NaN/Inf）。
   - 解决：在 `models/opusv1/opus_sampling.py` 使用 **fp32 投影 + nan_to_num + clamp**，并对 `num_views=1` 做除零保护。
+  - 仍偶发时：可用 `SafeAmpOptimWrapper` 开启 `sanitize_nonfinite_grads=True`，并适当降低 `loss_scale`。
 
 - **`ModuleNotFoundError: numpy._core`（PKL 与 NumPy 版本不匹配）**：
   - 常见原因：`*.pkl` 用 **NumPy 2.x** 序列化（pickle 里引用 `numpy._core.*`），但训练环境是 **NumPy 1.x**。
