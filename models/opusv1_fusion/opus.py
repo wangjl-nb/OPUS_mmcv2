@@ -1,5 +1,6 @@
 import time
 import queue
+import copy
 import torch
 import torch.nn.functional as F
 import numpy as np
@@ -31,6 +32,10 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                  pts_middle_encoder=None,
                  pts_fusion_layer=None,
                  img_backbone=None,
+                 img_encoder=None,
+                 use_external_img_encoder=False,
+                 enable_pts_feature_branch=True,
+                 external_img_cache=False,
                  pts_backbone=None,
                  img_neck=None,
                  pts_neck=None,
@@ -64,6 +69,14 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         )
         if pretrained is not None and init_cfg is None:
             self.init_cfg = dict(type='Pretrained', checkpoint=pretrained)
+
+        self.use_external_img_encoder = bool(use_external_img_encoder)
+        self.enable_pts_feature_branch = bool(enable_pts_feature_branch)
+        self.external_img_cache = bool(external_img_cache)
+        self.img_encoder = MODELS.build(img_encoder) if img_encoder is not None else None
+        if self.use_external_img_encoder and self.img_encoder is None:
+            raise ValueError('img_encoder must be provided when use_external_img_encoder=True')
+
         self.pts_voxel_layer = None
         if pts_voxel_layer is not None:
             self.pts_voxel_layer = Voxelization(**pts_voxel_layer)
@@ -76,17 +89,100 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         self.memory = {}
         self.queue = queue.Queue()
 
-        self.final_conv = ConvModule(
-            second_out_dim,
-            pts_feat_dim,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            bias=True,
-            conv_cfg=dict(type='Conv2d')
-        )
+        self.final_conv = None
+        if self.enable_pts_feature_branch:
+            self.final_conv = ConvModule(
+                second_out_dim,
+                pts_feat_dim,
+                kernel_size=3,
+                stride=1,
+                padding=1,
+                bias=True,
+                conv_cfg=dict(type='Conv2d')
+            )
 
         self.pts_feat_dim=pts_feat_dim
+        if not self.enable_pts_feature_branch:
+            # These modules are intentionally disabled in this training setup.
+            # Mark them frozen to avoid DDP unused-parameter reduction errors.
+            self._freeze_module(self.pts_voxel_encoder)
+            self._freeze_module(self.pts_middle_encoder)
+            self._freeze_module(self.pts_backbone)
+            self._freeze_module(self.pts_neck)
+
+    @staticmethod
+    def _freeze_module(module):
+        if module is None:
+            return
+        for parameter in module.parameters():
+            parameter.requires_grad = False
+        module.eval()
+
+    def _need_img_branch(self):
+        return self.use_external_img_encoder or self.with_img_backbone
+
+    def _normalize_points_list(self, points):
+        if points is None:
+            return None
+        if isinstance(points, torch.Tensor):
+            if points.dim() == 2:
+                return [points]
+            if points.dim() != 3:
+                raise TypeError(
+                    'points Tensor input must have shape [N, C] or [B, N, C] when passed to external img encoder, '
+                    f'but got {tuple(points.shape)}')
+            return [points[i] for i in range(points.shape[0])]
+        if isinstance(points, tuple):
+            points = list(points)
+        if not isinstance(points, list):
+            raise TypeError(
+                'points for external img encoder must be None, Tensor[B,N,C], or list of tensors, '
+                f'but got {type(points)}')
+        normalized = []
+        for pts in points:
+            if hasattr(pts, 'tensor'):
+                pts = pts.tensor
+            normalized.append(pts)
+        return normalized
+
+    def _extract_external_img_feat(self, img, points, img_metas, mapanything_extra=None):
+        points = self._normalize_points_list(points)
+        img_feats = self.img_encoder(
+            img,
+            points=points,
+            img_metas=img_metas,
+            mapanything_extra=mapanything_extra)
+
+        if isinstance(img_feats, (list, tuple)):
+            if len(img_feats) == 1 and isinstance(img_feats[0], torch.Tensor):
+                img_feats = img_feats[0]
+            else:
+                return list(img_feats)
+
+        if not isinstance(img_feats, torch.Tensor) or img_feats.dim() != 5:
+            raise ValueError(
+                'External img encoder output must be Tensor[B, TN, C, H, W] or single-element list, '
+                f"but got type={type(img_feats)} shape={getattr(img_feats, 'shape', None)}")
+
+        if self.with_img_neck:
+            img_feats = self.img_neck(img_feats)
+        else:
+            img_feats = [img_feats]
+
+        if not isinstance(img_feats, (list, tuple)):
+            raise TypeError(f'img_neck output must be list/tuple, got {type(img_feats)}')
+        for lvl, feat in enumerate(img_feats):
+            if not isinstance(feat, torch.Tensor) or feat.dim() != 5:
+                raise ValueError(
+                    f'Image feature at level {lvl} must be Tensor[B, TN, C, H, W], '
+                    f"got type={type(feat)} shape={getattr(feat, 'shape', None)}")
+        return list(img_feats)
+
+    def _extract_pts_feat_for_head(self, points):
+        if (not self.enable_pts_feature_branch) or (not self.with_pts_backbone):
+            return None
+        pts_feats = self.extract_pts_feat(points)
+        return self.final_conv(pts_feats[0])
 
     @torch.no_grad()
     def voxelize(self, points):
@@ -122,11 +218,18 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         return img_feats
 
-    def extract_img_feat(self, img, img_metas):
+    def extract_img_feat(self, img, img_metas, points=None, mapanything_extra=None):
         if isinstance(img, list):
             img = torch.stack(img, dim=0)
 
         assert img.dim() == 5
+
+        if self.use_external_img_encoder:
+            return self._extract_external_img_feat(
+                img,
+                points=points,
+                img_metas=img_metas,
+                mapanything_extra=mapanything_extra)
 
         B, N, C, H, W = img.size()
         img = img.view(B * N, C, H, W)
@@ -221,6 +324,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
     def loss(self, inputs, data_samples):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
         points = inputs.get('points') if isinstance(inputs, dict) else None
+        mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
         img_metas = self._collect_img_metas(data_samples)
         voxel_semantics = self._stack_data_samples(data_samples, 'voxel_semantics')
         mask_camera = self._stack_data_samples(data_samples, 'mask_camera')
@@ -239,6 +343,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         return self.forward_train(
             img=img,
             points=points,
+            mapanything_extra=mapanything_extra,
             img_metas=img_metas,
             voxel_semantics=voxel_semantics,
             mask_camera=mask_camera,
@@ -247,11 +352,14 @@ class OPUSV1Fusion(MVXTwoStageDetector):
     def predict(self, inputs, data_samples, rescale=False):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
         points = inputs.get('points') if isinstance(inputs, dict) else None
+        mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
         img_metas = self._collect_img_metas(data_samples)
-        return self.simple_test(img_metas, img, points, rescale=rescale)
+        return self.simple_test(img_metas, img, points, rescale=rescale,
+                                mapanything_extra=mapanything_extra)
 
     def forward_train(self,
                       points=None,
+                      mapanything_extra=None,
                       img_metas=None,
                       gt_bboxes_3d=None,
                       gt_labels_3d=None,
@@ -287,11 +395,13 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-        img_feats = None if not self.with_img_backbone else \
-            self.extract_img_feat(img, img_metas)
-        pts_feats = None if not self.with_pts_backbone else \
-            self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+        img_feats = self.extract_img_feat(
+            img,
+            img_metas,
+            points=points,
+            mapanything_extra=mapanything_extra) \
+            if self._need_img_branch() else None
+        pts_feats = self._extract_pts_feat_for_head(points)
         debug_is_finite('img_feats', img_feats)
         debug_is_finite('pts_feats', pts_feats)
 
@@ -331,10 +441,25 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         num_views = self._get_num_views()
         return num_views > 0 and img.shape[1] % num_views == 0
 
-    def simple_test(self, img_metas, img=None, points=None, rescale=False):
+    def simple_test(self,
+                    img_metas,
+                    img=None,
+                    points=None,
+                    rescale=False,
+                    mapanything_extra=None):
         if self._can_use_online_test(img_metas, img):
-            return self.simple_test_online(img_metas, img, points, rescale)
-        return self.simple_test_offline(img_metas, img, points, rescale)
+            return self.simple_test_online(
+                img_metas,
+                img,
+                points,
+                rescale,
+                mapanything_extra=mapanything_extra)
+        return self.simple_test_offline(
+            img_metas,
+            img,
+            points,
+            rescale,
+            mapanything_extra=mapanything_extra)
 
     def _collect_img_metas(self, data_samples):
         if not data_samples:
@@ -351,21 +476,79 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             return torch.stack(values, dim=0)
         return torch.tensor(values)
 
-    def simple_test_offline(self, img_metas, img=None, points=None, rescale=False):
-        img_feats = None if not self.with_img_backbone else \
-            self.extract_img_feat(img, img_metas)
-        pts_feats = None if not self.with_pts_backbone else \
-            self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+    def _normalize_mapanything_extra(self, mapanything_extra, batch_size):
+        if mapanything_extra is None:
+            return None
+        if isinstance(mapanything_extra, dict):
+            return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
+        if isinstance(mapanything_extra, tuple):
+            mapanything_extra = list(mapanything_extra)
+        if not isinstance(mapanything_extra, list):
+            raise TypeError(
+                'mapanything_extra must be None, dict, or list of dict, '
+                f'but got {type(mapanything_extra)}')
+        if len(mapanything_extra) != batch_size:
+            raise ValueError(
+                f'mapanything_extra batch size mismatch: got {len(mapanything_extra)}, '
+                f'expected {batch_size}')
+        normalized = []
+        for item in mapanything_extra:
+            if item is None:
+                normalized.append(None)
+            elif isinstance(item, dict):
+                normalized.append(copy.deepcopy(item))
+            else:
+                raise TypeError(
+                    f'Each mapanything_extra item must be dict/None, got {type(item)}')
+        return normalized
+
+    def _slice_mapanything_extra(self, mapanything_extra, img_indices, total_views):
+        if mapanything_extra is None:
+            return None
+
+        sliced = []
+        for sample_extra in mapanything_extra:
+            if sample_extra is None:
+                sliced.append(None)
+                continue
+            if not isinstance(sample_extra, dict):
+                raise TypeError(
+                    f'Each mapanything_extra item must be dict/None, got {type(sample_extra)}')
+            sample_out = copy.deepcopy(sample_extra)
+            views = sample_out.get('views', None)
+            if isinstance(views, (list, tuple)) and len(views) == total_views:
+                sample_out['views'] = [views[j] for j in img_indices]
+            sliced.append(sample_out)
+        return sliced
+
+    def simple_test_offline(self,
+                            img_metas,
+                            img=None,
+                            points=None,
+                            rescale=False,
+                            mapanything_extra=None):
+        img_feats = self.extract_img_feat(
+            img,
+            img_metas,
+            points=points,
+            mapanything_extra=mapanything_extra) \
+            if self._need_img_branch() else None
+        pts_feats = self._extract_pts_feat_for_head(points)
 
         outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
                                   img_metas=img_metas, points=points)
         return self.pts_bbox_head.get_occ(outs, img_metas[0], rescale=rescale)
 
-    def simple_test_online(self, img_metas, img=None, points=None, rescale=False):
+    def simple_test_online(self,
+                           img_metas,
+                           img=None,
+                           points=None,
+                           rescale=False,
+                           mapanything_extra=None):
         assert len(img_metas) == 1  # batch_size = 1
 
         B, N, C, H, W = img.shape
+        mapanything_extra = self._normalize_mapanything_extra(mapanything_extra, B)
         num_views = self._get_num_views()
         img = img.reshape(B, N // num_views, num_views, C, H, W)
 
@@ -381,8 +564,16 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img_feats_list, img_metas_list = [], []
 
         # extract feature frame by frame
+        allow_cache = not (self.use_external_img_encoder and not self.external_img_cache)
+        if mapanything_extra is not None:
+            # Optional extra modalities can change feature semantics even for same filename.
+            allow_cache = False
         for i in range(num_frames):
             img_indices = list(np.arange(i * num_views, (i + 1) * num_views))
+            extra_curr = self._slice_mapanything_extra(
+                mapanything_extra,
+                img_indices=img_indices,
+                total_views=num_views * num_frames)
 
             img_metas_curr = [{}]
             for k in img_metas[0].keys():
@@ -392,17 +583,22 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 else:
                     img_metas_curr[0][k] = item
 
-            if img_filenames[img_indices[0]] in self.memory:
+            if allow_cache and img_filenames[img_indices[0]] in self.memory:
                 # found in memory
                 img_feats_curr = self.memory[img_filenames[img_indices[0]]]
             else:
                 # extract feature and put into memory
-                img_feats_curr = self.extract_img_feat(img[:, i], img_metas_curr)
-                self.memory[img_filenames[img_indices[0]]] = img_feats_curr
-                self.queue.put(img_filenames[img_indices[0]])
-                while self.queue.qsize() >= 16:  # avoid OOM
-                    pop_key = self.queue.get()
-                    self.memory.pop(pop_key)
+                img_feats_curr = self.extract_img_feat(
+                    img[:, i],
+                    img_metas_curr,
+                    points=points,
+                    mapanything_extra=extra_curr)
+                if allow_cache:
+                    self.memory[img_filenames[img_indices[0]]] = img_feats_curr
+                    self.queue.put(img_filenames[img_indices[0]])
+                    while self.queue.qsize() >= 16:  # avoid OOM
+                        pop_key = self.queue.get()
+                        self.memory.pop(pop_key)
 
             img_feats_list.append(img_feats_curr)
             img_metas_list.append(img_metas_curr)
@@ -426,9 +622,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img_feats = cast_tensor_type(img_feats, torch.half, torch.float32)
 
         # extract points features
-        pts_feats = None if not self.with_pts_backbone else \
-            self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+        pts_feats = self._extract_pts_feat_for_head(points)
 
         # run occupancy predictor
         outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
