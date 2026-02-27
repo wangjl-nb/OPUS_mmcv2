@@ -35,6 +35,7 @@ class OPUSV1FusionTransformer(BaseModule):
                  num_groups=4,
                  num_refines=[1, 2, 4, 8, 16, 32],
                  scales=[1.0],
+                 use_pts_sampling=True,
                  query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
@@ -49,6 +50,7 @@ class OPUSV1FusionTransformer(BaseModule):
         self.decoder = OPUSTransformerDecoder(
             embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
             num_classes, num_refines, num_groups, scales,
+            use_pts_sampling=use_pts_sampling,
             query_allocator=query_allocator, pc_range=pc_range)
 
     @torch.no_grad()
@@ -77,6 +79,7 @@ class OPUSTransformerDecoder(BaseModule):
                  num_refines=16,
                  num_groups=4,
                  scales=[1.0],
+                 use_pts_sampling=True,
                  query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
@@ -86,6 +89,7 @@ class OPUSTransformerDecoder(BaseModule):
         self.num_frames = num_frames
         self.num_views = num_views
         self.num_groups = num_groups
+        self.use_pts_sampling = bool(use_pts_sampling)
         self.query_allocator = query_allocator or {}
 
         if len(scales) == 1:
@@ -103,7 +107,8 @@ class OPUSTransformerDecoder(BaseModule):
                 OPUSTransformerDecoderLayer(
                     embed_dims, num_frames, num_views, num_points, num_levels, num_classes, 
                     num_groups, num_refines[i], last_refines[i], layer_idx=i, 
-                    scale=scales[i], pc_range=pc_range)
+                    scale=scales[i], pc_range=pc_range,
+                    use_pts_sampling=self.use_pts_sampling)
             )
 
     @torch.no_grad()
@@ -202,12 +207,14 @@ class OPUSTransformerDecoder(BaseModule):
         occ2ego = torch.inverse(ego2occ) # [B, 4, 4]
         occ2img = ego2img @ occ2ego[:, None].expand_as(ego2img)
 
-        ego2lidar = np.asarray([m['ego2lidar'] for m in img_metas]).astype(np.float32)
-        ego2lidar = query_feat.new_tensor(ego2lidar) # [B, 4, 4]
-        occ2lidar = ego2lidar @ occ2ego
+        occ2lidar = None
+        if self.use_pts_sampling:
+            ego2lidar = np.asarray([m['ego2lidar'] for m in img_metas]).astype(np.float32)
+            ego2lidar = query_feat.new_tensor(ego2lidar) # [B, 4, 4]
+            occ2lidar = ego2lidar @ occ2ego
+            debug_is_finite('ego2lidar', ego2lidar)
         debug_is_finite('ego2img', ego2img)
         debug_is_finite('ego2occ', ego2occ)
-        debug_is_finite('ego2lidar', ego2lidar)
         debug_is_finite('occ2img', occ2img)
         debug_is_finite('occ2lidar', occ2lidar)
 
@@ -227,10 +234,13 @@ class OPUSTransformerDecoder(BaseModule):
 
             mlvl_feats[lvl] = feat.contiguous()
 
-        # group pts features in advance for sampling
-        B, GC, H, W = pts_feats.shape
-        G, C = self.num_groups, GC//self.num_groups
-        pts_feats = pts_feats.reshape(B, G, C, H, W).reshape(B*G, C, H, W)
+        if self.use_pts_sampling:
+            if pts_feats is None:
+                raise ValueError('pts_feats must be provided when use_pts_sampling=True')
+            # group pts features in advance for sampling
+            B, GC, H, W = pts_feats.shape
+            G, C = self.num_groups, GC // self.num_groups
+            pts_feats = pts_feats.reshape(B, G, C, H, W).reshape(B * G, C, H, W)
 
         for i, decoder_layer in enumerate(self.decoder_layers):
             DUMP.stage_count = i
@@ -268,6 +278,7 @@ class OPUSTransformerDecoderLayer(BaseModule):
                  layer_idx=0,
                  scale=1.0,
                  pc_range=[],
+                 use_pts_sampling=True,
                  init_cfg=None):
         super().__init__(init_cfg)
 
@@ -279,6 +290,7 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.last_refines = last_refines
         self.layer_idx = layer_idx
         self.scale = scale
+        self.use_pts_sampling = bool(use_pts_sampling)
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3 * self.last_refines, self.embed_dims), 
@@ -293,10 +305,12 @@ class OPUSTransformerDecoderLayer(BaseModule):
             embed_dims, num_heads=8, dropout=0.1, pc_range=pc_range)
         self.sampling = OPUSSampling(embed_dims, num_frames=num_frames, num_views=num_views,
                                      num_groups=num_groups, num_points=num_points, 
-                                     num_levels=num_levels, pc_range=pc_range)
+                                     num_levels=num_levels, pc_range=pc_range,
+                                     use_pts_sampling=self.use_pts_sampling)
         
+        mixing_points = num_points * (num_frames + (1 if self.use_pts_sampling else 0))
         self.img_pts_mixing=AdaptiveMixing(
-            in_dim=embed_dims, in_points=num_points * (num_frames+1), n_groups=num_groups)
+            in_dim=embed_dims, in_points=mixing_points, n_groups=num_groups)
 
         self.ffn = FFN(embed_dims, feedforward_channels=512, ffn_drop=0.1)
 
@@ -349,7 +363,10 @@ class OPUSTransformerDecoderLayer(BaseModule):
 
         sampled_img_feat, sampled_pts_feat = self.sampling(
             query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas)
-        sampled_feat = torch.cat([sampled_img_feat, sampled_pts_feat],dim=-2) # B,Q,G,(T+1)P,C1
+        if sampled_pts_feat is None:
+            sampled_feat = sampled_img_feat
+        else:
+            sampled_feat = torch.cat([sampled_img_feat, sampled_pts_feat], dim=-2) # B,Q,G,(T+1)P,C1
         query_feat = self.norm1(self.img_pts_mixing(sampled_feat, query_feat))
         query_feat = self.norm2(self.self_attn(query_points, query_feat))
         query_feat = self.norm3(self.ffn(query_feat))
@@ -433,6 +450,7 @@ class OPUSSampling(BaseModule):
                  num_points=8,
                  num_levels=4,
                  pc_range=[],
+                 use_pts_sampling=True,
                  init_cfg=None):
         super().__init__(init_cfg)
 
@@ -442,6 +460,7 @@ class OPUSSampling(BaseModule):
         self.num_groups = num_groups
         self.num_levels = num_levels
         self.pc_range = pc_range
+        self.use_pts_sampling = bool(use_pts_sampling)
 
         self.sampling_offset = nn.Linear(embed_dims, num_groups * num_points * 3)
         self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels)
@@ -494,12 +513,18 @@ class OPUSSampling(BaseModule):
             self.num_views
         )  # [B, Q, G, FP, C]
 
-        sampled_pts_feats = sampling_pts_feats(
-            pts_sampling_points,
-            pts_feats,
-            occ2lidar,
-            self.pc_range
-        )  # [B, Q, G, P, C]
+        sampled_pts_feats = None
+        if self.use_pts_sampling:
+            if pts_feats is None:
+                raise ValueError('pts_feats is None while use_pts_sampling=True')
+            if occ2lidar is None:
+                raise ValueError('occ2lidar is None while use_pts_sampling=True')
+            sampled_pts_feats = sampling_pts_feats(
+                pts_sampling_points,
+                pts_feats,
+                occ2lidar,
+                self.pc_range
+            )  # [B, Q, G, P, C]
 
         return sampled_img_feats, sampled_pts_feats
 

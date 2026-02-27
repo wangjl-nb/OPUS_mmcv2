@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts_0.2/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -76,7 +76,7 @@ cls_weights = [
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
 pc_voxel_size = [0.05, 0.05, 0.05]
-voxel_size = [0.2, 0.2, 0.2]
+voxel_size = [0.05, 0.05, 0.05]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
@@ -123,27 +123,50 @@ num_refines = [
                 128,
             ]  # Decoder point expansion per layer.
 
-img_backbone = dict(
-    type='ResNet',
-    _scope_='mmdet',
-    depth=50,
-    num_stages=4,
-    out_indices=(0, 1, 2, 3),
-    frozen_stages=1,
-    norm_cfg=dict(type='BN2d', requires_grad=True),
-    norm_eval=True,
-    style='pytorch',
-    with_cp=True)
+# Internal MapAnything wrapper config.
+mapanything_feat_dims = 1024
+mapanything_repo_root = '/root/wjl/map-anything'
+mapanything_model_source = 'facebook/map-anything-apache-v1'
+img_encoder = dict(
+    type='MapAnythingOccEncoder',
+    repo_root=mapanything_repo_root,
+    mapanything_model_cfg=dict(
+        load_type='from_pretrained',
+        model_id_or_path=mapanything_model_source,
+        from_pretrained_kwargs=dict(local_files_only=True),
+    ),
+    mapanything_preprocess_cfg=dict(
+        resize_mode='fixed_mapping',
+        resolution_set=518,
+        norm_type='dinov2',
+        patch_size=14,
+    ),
+    num_views=dataset_cfg['num_views'],
+    num_frames=num_frames,
+    chunk_by_frame=True,
+    tn_align_mode='strict',
+    strip_to_feature_mode=True,
+    lidar_injection='shared',
+    freeze=True,
+    enable_random_mask=False,  # One-key switch: set True to enable MapAnything stochastic modality masking in train.
+    random_mask_cfg=dict(      # Override any subset of MapAnything geometric_input_config probabilities.
+        overall_prob=0.9,
+        dropout_prob=0.05,
+        ray_dirs_prob=0.5,
+        depth_prob=0.5,
+        cam_prob=0.5,
+        sparse_depth_prob=0.5,
+    ),
+    strict_shapes=True,
+    expect_contiguous=True,
+)
 img_neck = dict(
-    type='FPN',
-    _scope_='mmdet',
-    in_channels=[256, 512, 1024, 2048],
+    type='SingleLevelToFPN',
+    in_channels=mapanything_feat_dims,
     out_channels=embed_dims,
-    num_outs=num_levels)
-img_norm_cfg = dict(
-    mean=[123.675, 116.280, 103.530],
-    std=[58.395, 57.120, 57.375],
-    to_rgb=True)
+    num_outs=num_levels,
+    norm_cfg=dict(type='BN2d', requires_grad=True),
+)
 
 pts_voxel_layer=dict(max_num_points=10, voxel_size=pc_voxel_size, deterministic=False,
                      max_voxels=(90000, 120000), point_cloud_range=point_cloud_range)
@@ -181,12 +204,13 @@ model = dict(
     type='OPUSV1Fusion',
     data_preprocessor=dict(type='BaseDataPreprocessor'),
     use_grid_mask=False,
-    data_aug=dict(
-        img_color_aug=True,  # Move some augmentations to GPU
-        img_norm_cfg=img_norm_cfg,
-        img_pad_cfg=dict(size_divisor=32)),
+    data_aug=None,  # External wrapper handles image normalization/augmentation.
     stop_prev_grad=0,
-    img_backbone=img_backbone,
+    img_backbone=None,
+    img_encoder=img_encoder,
+    use_external_img_encoder=True,
+    enable_pts_feature_branch=False,
+    external_img_cache=False,
     img_neck=img_neck,
     pts_voxel_layer=pts_voxel_layer,
     pts_voxel_encoder=pts_voxel_encoder,
@@ -210,6 +234,7 @@ model = dict(
             num_points=num_points,
             num_layers=num_layers,
             num_levels=num_levels,
+            use_pts_sampling=False,
             num_classes=len(occ_names),
             num_refines=num_refines,
             scales=[0.5],
@@ -310,7 +335,7 @@ train_pipeline = [
     # dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='PackOcc3DInputs', meta_keys=(
+    dict(type='PackOcc3DInputs', extra_input_keys=('mapanything_extra',), meta_keys=(
         'sample_idx', 'sample_token', 'scene_name',
         'filename', 'ori_shape', 'img_shape', 'pad_shape',
         'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
@@ -325,7 +350,7 @@ test_pipeline = [
     dict(type='LiDARToOccSpace'),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
-    dict(type='PackOcc3DInputs', meta_keys=(
+    dict(type='PackOcc3DInputs', extra_input_keys=('mapanything_extra',), meta_keys=(
         'sample_idx', 'sample_token', 'scene_name',
         'filename', 'ori_shape', 'img_shape', 'pad_shape',
         'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
@@ -397,7 +422,6 @@ optim_wrapper = dict(
     type='AmpOptimWrapper',
     optimizer=optimizer,
     paramwise_cfg=dict(custom_keys={
-        'img_backbone': dict(lr_mult=0.1),
         'sampling_offset': dict(lr_mult=0.1),
     }),
     loss_scale=512.0,

@@ -1,3 +1,4 @@
+import copy
 from typing import Sequence
 
 import numpy as np
@@ -14,8 +15,11 @@ except Exception:  # pragma: no cover
 
 @TRANSFORMS.register_module()
 class PackOcc3DInputs:
-    def __init__(self, meta_keys: Sequence[str] = ()):
+    def __init__(self,
+                 meta_keys: Sequence[str] = (),
+                 extra_input_keys: Sequence[str] = ()):
         self.meta_keys = tuple(meta_keys)
+        self.extra_input_keys = tuple(extra_input_keys)
 
     def _to_tensor(self, data):
         if isinstance(data, torch.Tensor):
@@ -49,6 +53,9 @@ class PackOcc3DInputs:
             if hasattr(points, 'tensor'):
                 points = points.tensor
             inputs['points'] = self._to_tensor(points)
+        for key in self.extra_input_keys:
+            if key in results:
+                inputs[key] = copy.deepcopy(results[key])
 
         data_sample = Det3DDataSample()
         if 'voxel_semantics' in results:
