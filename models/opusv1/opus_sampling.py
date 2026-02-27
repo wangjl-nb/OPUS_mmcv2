@@ -50,17 +50,20 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, imag
     sample_points = sample_points.expand(B, Q, N, T, G * P, 4, 1)
     sample_points = sample_points.transpose(1, 3)   # [B, T, N, Q, GP, 4, 1]
 
-    # project 3d sampling points to N views
-    sample_points_cam = torch.matmul(occ2img, sample_points).squeeze(-1)  # [B, T, N, Q, GP, 4]
+    # project 3d sampling points to N views (force fp32 to avoid fp16 overflow)
+    with torch.cuda.amp.autocast(enabled=False):
+        sample_points_cam = torch.matmul(occ2img.float(), sample_points.float()).squeeze(-1)  # [B, T, N, Q, GP, 4]
 
-    # homo coord -> pixel coord
-    homo = sample_points_cam[..., 2:3]
-    homo_nonzero = torch.maximum(homo, torch.zeros_like(homo) + eps)
-    sample_points_cam = sample_points_cam[..., 0:2] / homo_nonzero  # [B, T, N, Q, GP, 2]
+        # homo coord -> pixel coord
+        homo = sample_points_cam[..., 2:3]
+        homo_nonzero = torch.maximum(homo, torch.zeros_like(homo) + eps)
+        sample_points_cam = sample_points_cam[..., 0:2] / homo_nonzero  # [B, T, N, Q, GP, 2]
+        sample_points_cam = torch.nan_to_num(sample_points_cam, nan=0.0, posinf=2.0, neginf=-2.0)
 
     # normalize
     sample_points_cam[..., 0] /= image_w
     sample_points_cam[..., 1] /= image_h
+    sample_points_cam = sample_points_cam.clamp(-2.0, 2.0)
 
     # check if out of image
     valid_mask = ((homo > eps) \
@@ -98,7 +101,12 @@ def sampling_4d(sample_points, mlvl_feats, scale_weights, occ2img, image_h, imag
     valid_mask = valid_mask[i_batch, i_time, i_query, i_point, i_view]  # [B, Q, GP, 1]
 
     # treat the view index as a new axis for grid_sample and normalize the view index to [0, 1]
-    sample_points_cam = torch.cat([sample_points_cam, i_view[..., None].float() / (N - 1)], dim=-1)
+    # guard against N==1 to avoid division by zero
+    if N > 1:
+        view_coord = i_view[..., None].float() / (N - 1)
+    else:
+        view_coord = torch.zeros_like(i_view[..., None], dtype=sample_points_cam.dtype)
+    sample_points_cam = torch.cat([sample_points_cam, view_coord], dim=-1)
 
     # reorganize the tensor to stack T and G to the batch dim for better parallelism
     sample_points_cam = sample_points_cam.reshape(B, T, Q, G, P, 1, 3)

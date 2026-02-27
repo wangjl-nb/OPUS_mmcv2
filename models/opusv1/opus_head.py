@@ -152,16 +152,24 @@ class OPUSV1Head(BaseModule):
         cls_scores = cls_scores.reshape(num_imgs, -1, self.num_classes)
         refine_pts = refine_pts.reshape(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
-        refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
+        valid_indices = [i for i, gt in enumerate(gt_points_list) if gt.numel() > 0]
+        if len(valid_indices) == 0:
+            zero = cls_scores.sum() * 0.0
+            return zero, zero
+
+        cls_scores_list = [cls_scores[i] for i in valid_indices]
+        refine_pts_list = [refine_pts[i] for i in valid_indices]
+        gt_points_list = [gt_points_list[i] for i in valid_indices]
+        gt_masks_list = [gt_masks_list[i] for i in valid_indices]
+        gt_labels_list = [gt_labels_list[i] for i in valid_indices]
 
         (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
          gt_pts_weights) = multi_apply(
              self._get_target_single, refine_pts_list, gt_points_list, 
              gt_masks_list, gt_labels_list)
         
-        gt_paired_pts, pred_paired_pts= [], []
-        for i in range(num_imgs):
+        gt_paired_pts, pred_paired_pts = [], []
+        for i in range(len(gt_paired_idx_list)):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
 
@@ -290,6 +298,7 @@ class OPUSV1Head(BaseModule):
         B, W, H, Z = voxel_semantics.shape
         device = voxel_semantics.device
         voxel_semantics = voxel_semantics.long()
+        hard_camera_mask = self.train_cfg.get('hard_camera_mask', False)
 
         x = torch.arange(0, W, dtype=torch.float32, device=device)
         x = (x + 0.5) / W * self.scene_size[0] + self.pc_range[0]
@@ -305,9 +314,28 @@ class OPUSV1Head(BaseModule):
 
         gt_points, gt_masks, gt_labels = [], [], []
         for i in range(B):
-            mask = voxel_semantics[i] != self.empty_label
-            gt_points.append(coors[mask])
-            gt_masks.append(mask_camera[i][mask]) # camera mask and not empty
-            gt_labels.append(voxel_semantics[i][mask])
+            non_empty_mask = voxel_semantics[i] != self.empty_label
+            if hard_camera_mask:
+                visible_mask = mask_camera[i].bool()
+                final_mask = non_empty_mask & visible_mask
+                # If camera mask is empty for this sample, fallback to non-empty voxels.
+                if final_mask.sum() == 0 and non_empty_mask.sum() > 0:
+                    final_mask = non_empty_mask
+                    use_hard_mask = False
+                else:
+                    use_hard_mask = True
+            else:
+                final_mask = non_empty_mask
+                use_hard_mask = False
+
+            gt_points.append(coors[final_mask])
+            gt_labels.append(voxel_semantics[i][final_mask])
+            if use_hard_mask:
+                gt_masks.append(torch.ones_like(gt_labels[-1], dtype=torch.bool))
+            else:
+                # Legacy behavior: use camera visibility to reweight non-empty GT.
+                gt_masks.append(mask_camera[i][non_empty_mask])
+
+        # Allow empty gt_points; loss_single will skip empty samples.
         
         return gt_points, gt_masks, gt_labels
