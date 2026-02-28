@@ -2,8 +2,8 @@ default_scope = 'mmdet3d'
 custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
-dataset_root = '/root/wjl/data/tartanground_demo/'
-occ_root = '/root/wjl/tartanground_demo/gts/'
+dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -168,7 +168,7 @@ model = dict(
         pc_range=point_cloud_range,
         empty_label=79,  # Index of free/unoccupied voxel label.
         voxel_size=voxel_size,
-        init_pos_lidar='curr',
+        init_pos_lidar="curr",
         transformer=dict(
             type='OPUSV1FusionTransformer',
             embed_dims=embed_dims,
@@ -242,7 +242,7 @@ model = dict(
                 enabled=True,
                 lidar_ratio=0.7,  # Ratio of FPS queries from LiDAR points.
                 random_ratio=0.3,  # Ratio of random queries.
-                random_mode='uniform_pc_range',  # Back-fill random points from pc_range.
+                random_mode='uniform_pc_range',
             ),
         )
     ),
