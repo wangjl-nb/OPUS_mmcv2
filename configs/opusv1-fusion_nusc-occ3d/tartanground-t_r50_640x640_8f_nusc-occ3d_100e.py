@@ -153,7 +153,7 @@ mapanything_preprocess_cfg = dict(
 )
 img_encoder = dict(
     type='MapAnythingOccEncoder',
-    repo_root='/root/wjl/map-anything',
+    repo_root='/root/wjl/OPUS_mmcv2/third_party/map-anything',
     freeze=True,
     num_views=dataset_cfg['num_views'],
     num_frames=8,

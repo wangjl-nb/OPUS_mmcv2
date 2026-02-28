@@ -1,0 +1,1 @@
+python reconstruct_pointcloud.py similarity --view front --x 311 --y 303
