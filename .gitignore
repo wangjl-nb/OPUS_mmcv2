@@ -44,6 +44,8 @@ pyrightconfig.json
 
 # Custom
 data
+!scripts/data/
+!scripts/data/add_depth_paths_to_ann.py
 outputs
 prediction
 submission
@@ -57,3 +59,5 @@ train_field_clouds
 tests
 
 demos
+TASK_WORKORDER_CURRENT.md
+mapanything

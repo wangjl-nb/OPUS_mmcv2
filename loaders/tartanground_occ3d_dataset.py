@@ -159,6 +159,7 @@ class TartangroundOcc3DDataset(BaseDataset):
             input_dict.update(dict(
                 img_filename=img_paths,
                 img_timestamp=img_timestamps,
+                cams=info['cams'],
                 ego2img=ego2img,
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
                 cam_types=cam_types,

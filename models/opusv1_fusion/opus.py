@@ -26,6 +26,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                  use_grid_mask=True,
                  data_aug=None,
                  stop_prev_grad=0,
+                 drop_lidar_feat=False,
                  pts_voxel_layer=None,
                  pts_voxel_encoder=None,
                  pts_middle_encoder=None,
@@ -87,6 +88,15 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         )
 
         self.pts_feat_dim=pts_feat_dim
+        self.drop_lidar_feat = bool(drop_lidar_feat)
+
+    def _maybe_drop_lidar_feat(self, pts_feats):
+        """Optional ablation: keep LiDAR points for query init but drop LiDAR features."""
+        if pts_feats is None or not self.drop_lidar_feat:
+            return pts_feats
+        # Keep computation graph connected for DDP: parameters in LiDAR branch
+        # still participate (with zero gradient) instead of becoming "unused".
+        return pts_feats * 0.0
 
     @torch.no_grad()
     def voxelize(self, points):
@@ -291,7 +301,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             self.extract_img_feat(img, img_metas)
         pts_feats = None if not self.with_pts_backbone else \
             self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+        if pts_feats is not None:
+            pts_feats = self.final_conv(pts_feats[0])
+            pts_feats = self._maybe_drop_lidar_feat(pts_feats)
         debug_is_finite('img_feats', img_feats)
         debug_is_finite('pts_feats', pts_feats)
 
@@ -356,7 +368,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             self.extract_img_feat(img, img_metas)
         pts_feats = None if not self.with_pts_backbone else \
             self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+        if pts_feats is not None:
+            pts_feats = self.final_conv(pts_feats[0])
+            pts_feats = self._maybe_drop_lidar_feat(pts_feats)
 
         outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
                                   img_metas=img_metas, points=points)
@@ -428,7 +442,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         # extract points features
         pts_feats = None if not self.with_pts_backbone else \
             self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
+        if pts_feats is not None:
+            pts_feats = self.final_conv(pts_feats[0])
+            pts_feats = self._maybe_drop_lidar_feat(pts_feats)
 
         # run occupancy predictor
         outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,

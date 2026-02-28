@@ -4,7 +4,30 @@
 - `configs/`: model & dataset configs (OPUSV1/OPUSV2, fusion variants)
 - `models/`: core model implementations (OPUSV1, OPUSV1Fusion, heads, transformers)
 - `loaders/`: datasets + pipelines + metrics
+- `scripts/data/`: dataset metadata utility scripts (ann-file maintenance)
 - `train.py`, `val.py`: training/validation entry points
+
+## Dataset ann metadata tooling (generic)
+- Incremental depth metadata injection script:
+  - `scripts/data/add_depth_paths_to_ann.py`
+  - Purpose: add optional `depth_path` into `infos[*].cams[*]` and `infos[*].cam_sweeps[*][*]` without touching original pkl.
+  - Supports:
+    - `--skip-if-exists` (default true, only fill missing keys)
+    - `--strict-exists` (fail on missing mapped depth files)
+    - `--report-json` (emit summary + missing samples)
+  - Typical usage:
+    - `python3 scripts/data/add_depth_paths_to_ann.py --in-pkl <src>.pkl --out-pkl <dst>_with_depth.pkl --report-json <dst>.depth_report.json`
+
+## Point-source switch (LiDAR / Depth)
+- New depth-to-points transform:
+  - `loaders/pipelines/loading.py` -> `LoadPointsFromMultiViewDepth`
+  - Converts selected multi-view depth maps into pseudo-LiDAR points (`[x, y, z, intensity, time]`).
+- Query init compatibility:
+  - Keep `init_pos_lidar='curr'` unchanged.
+  - Depth mode sets current-frame points to `time=0`, history sweeps `time>0`, so current-only query init still works.
+- Config switch example:
+  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_depth_points_switch.py`
+  - `point_input_source = 'depth'` or `'lidar'`
 
 ## Model overview
 OPUS is an occupancy prediction framework using query points + transformer-style refinement. There are two main variants:
@@ -19,6 +42,10 @@ Key files:
 - OPUSV1 fusion head: `models/opusv1_fusion/opus_head.py`
 
 ## Session quick-start（通用）
+- 新 session 默认读取顺序：
+  1. `TASK_WORKORDER_CURRENT.md`（任务上下文）
+  2. `PROJECT_GUIDE.md`（项目通用知识）
+- 若 `TASK_WORKORDER_CURRENT.md` 不存在，先从 `TASK_WORKORDER_TEMPLATE.md` 复制一份再开始记录。
 - 先看当前 run 的完整日志：`outputs/<exp_name>/<date_or_tag>/<run_id>/<run_id>.log`
 - 再看同目录冻结配置副本：`outputs/<exp_name>/<date_or_tag>/<config_name>.py`
 - 定位 loss 逻辑优先读：`models/opusv1_fusion/opus_head.py`（`loss_single` 与 `loss`）
@@ -42,6 +69,7 @@ Key files:
 ## 需求到代码入口映射（最常用）
 - 改训练 loss/匹配/权重：`models/opusv1_fusion/opus_head.py`
 - 改 query 初始化策略：`models/opusv1_fusion/opus_head.py`（`get_init_position` 相关）
+- 做 Fusion 消融（去 LiDAR 特征但保留 LiDAR 初始化）：`models/opusv1_fusion/opus.py`（`drop_lidar_feat`）
 - 改 transformer 采样/投影：`models/opusv1/opus_transformer.py`, `models/opusv1/opus_sampling.py`
 - 改 detector 主流程：`models/opusv1/opus.py`, `models/opusv1_fusion/opus.py`
 - 改数据读取与评估：`loaders/`（dataset + pipeline + metrics）
@@ -272,6 +300,15 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 ### 4) Loss/GT 设计调整
 - 可在 `train_cfg` 增删 tail_focus / hard_mining / gt_balance。
 - 修改 `get_sparse_voxels` 可影响 GT 分布与稀疏化策略。
+
+### 5) Fusion LiDAR 特征消融（保留初始化）
+- 推荐做法：保持 `input_modality.use_lidar=True` 与 points pipeline 不变，只将 `model.drop_lidar_feat=True`。
+- 含义：LiDAR points 仍可用于 `init_pos_lidar` 初始化 query，但进入 head 的 `pts_feats` 被置零。
+- 优点：对比更干净（只消融 LiDAR feature contribution，不破坏 query 初始化路径）。
+- 实现注意：置零要用“保留计算图”的方式（如 `pts_feats * 0.0`），不要直接 `torch.zeros_like` 覆盖，否则 DDP 可能报 unused-parameter/reduction 错误。
+- 常用配置：
+  - 仅去 LiDAR 特征（保留 LiDAR 初始化）：`configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_ablation_drop_lidar_feat.py`
+  - 同时去 LiDAR 初始化 + LiDAR 特征：`configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_ablation_drop_lidar_feat_no_lidar_init.py`
 
 ---
 
