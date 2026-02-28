@@ -1,4 +1,3 @@
-import copy
 import time
 import queue
 import copy
@@ -35,13 +34,12 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                  pts_fusion_layer=None,
                  img_backbone=None,
                  img_encoder=None,
+                 img_feature_fusion=None,
                  use_external_img_encoder=False,
                  enable_pts_feature_branch=True,
                  external_img_cache=False,
                  pts_backbone=None,
                  img_neck=None,
-                 img_encoder=None,
-                 img_feature_fusion=None,
                  pts_neck=None,
                  pts_bbox_head=None,
                  img_roi_head=None,
@@ -80,6 +78,41 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         self.img_encoder = MODELS.build(img_encoder) if img_encoder is not None else None
         if self.use_external_img_encoder and self.img_encoder is None:
             raise ValueError('img_encoder must be provided when use_external_img_encoder=True')
+        self.img_feature_fusion_cfg = copy.deepcopy(img_feature_fusion) if img_feature_fusion else None
+        self.use_img_feature_fusion = bool(
+            self.img_feature_fusion_cfg is not None
+            and self.img_encoder is not None
+            and not self.use_external_img_encoder)
+        img_encoder_cfg_freeze = False
+        if isinstance(img_encoder, dict):
+            img_encoder_cfg_freeze = bool(img_encoder.get('freeze', False))
+        self._freeze_img_encoder = bool(
+            img_encoder_cfg_freeze or
+            (self.img_feature_fusion_cfg is not None
+             and self.img_feature_fusion_cfg.get('freeze_img_encoder', True)))
+
+        self.img_fusion_proj = None
+        self.img_fusion_interp_mode = 'bilinear'
+        self.img_fusion_align_corners = False
+        if self.use_img_feature_fusion:
+            if not self.with_img_backbone:
+                raise ValueError('img_feature_fusion requires img_backbone to be enabled')
+            fusion_out_channels = self._infer_img_fusion_out_channels(
+                img_neck_cfg=img_neck,
+                pts_bbox_head_cfg=pts_bbox_head)
+            map_in_channels = int(self.img_feature_fusion_cfg.get('map_in_channels', 1024))
+            self.img_fusion_proj = nn.Conv2d(
+                map_in_channels,
+                fusion_out_channels,
+                kernel_size=1,
+                stride=1,
+                padding=0,
+                bias=True)
+            self.img_fusion_interp_mode = self.img_feature_fusion_cfg.get('interp_mode', 'bilinear')
+            self.img_fusion_align_corners = bool(
+                self.img_feature_fusion_cfg.get('align_corners', False))
+        if self._freeze_img_encoder and self.img_encoder is not None:
+            self._freeze_module(self.img_encoder)
 
         self.pts_voxel_layer = None
         if pts_voxel_layer is not None:
@@ -93,7 +126,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         self.memory = {}
         self.queue = queue.Queue()
 
-<<<<<<< HEAD
         self.final_conv = None
         if self.enable_pts_feature_branch:
             self.final_conv = ConvModule(
@@ -105,47 +137,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 bias=True,
                 conv_cfg=dict(type='Conv2d')
             )
-=======
-        self.img_encoder = None
-        self.img_fusion_proj = None
-        self.img_feature_fusion = copy.deepcopy(img_feature_fusion or {})
-        self.use_external_img_encoder = img_encoder is not None
-        if self.use_external_img_encoder:
-            self.img_encoder = MODELS.build(img_encoder)
-
-            map_out_channels = getattr(self.img_encoder, 'out_channels', None)
-            if map_out_channels is None:
-                map_out_channels = self.img_feature_fusion.get('map_out_channels', None)
-            if map_out_channels is None:
-                raise ValueError(
-                    'img_encoder must expose out_channels or img_feature_fusion.map_out_channels')
-
-            neck_out_channels = None
-            if self.with_img_neck and hasattr(self.img_neck, 'out_channels'):
-                neck_out_channels = getattr(self.img_neck, 'out_channels')
-            if neck_out_channels is None:
-                neck_out_channels = self.img_feature_fusion.get('out_channels', None)
-            if neck_out_channels is None:
-                raise ValueError(
-                    'img_neck must expose out_channels or img_feature_fusion.out_channels')
-
-            self.img_fusion_proj = nn.Conv2d(
-                int(map_out_channels), int(neck_out_channels), kernel_size=1, bias=True)
-            self._freeze_module(self.img_encoder)
-
-        self._fusion_interp_mode = self.img_feature_fusion.get('interp_mode', 'bilinear')
-        self._fusion_align_corners = self.img_feature_fusion.get('align_corners', False)
-
-        self.final_conv = ConvModule(
-            second_out_dim,
-            pts_feat_dim,
-            kernel_size=3,
-            stride=1,
-            padding=1,
-            bias=True,
-            conv_cfg=dict(type='Conv2d')
-        )
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
         self.pts_feat_dim=pts_feat_dim
         if not self.enable_pts_feature_branch:
@@ -164,8 +155,44 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             parameter.requires_grad = False
         module.eval()
 
+    @staticmethod
+    def _infer_img_fusion_out_channels(img_neck_cfg, pts_bbox_head_cfg):
+        if isinstance(img_neck_cfg, dict):
+            out_channels = img_neck_cfg.get('out_channels', None)
+            if isinstance(out_channels, (list, tuple)) and len(out_channels) > 0:
+                return int(out_channels[0])
+            if out_channels is not None:
+                return int(out_channels)
+        if isinstance(pts_bbox_head_cfg, dict):
+            in_channels = pts_bbox_head_cfg.get('in_channels', None)
+            if in_channels is not None:
+                return int(in_channels)
+        return 256
+
+    def train(self, mode=True):
+        super().train(mode)
+        if self._freeze_img_encoder and self.img_encoder is not None:
+            self.img_encoder.eval()
+        return self
+
     def _need_img_branch(self):
         return self.use_external_img_encoder or self.with_img_backbone
+
+    @staticmethod
+    def _get_level_weights(weight_cfg, num_levels, name):
+        if isinstance(weight_cfg, (float, int)):
+            return [float(weight_cfg) for _ in range(num_levels)]
+        if isinstance(weight_cfg, tuple):
+            weight_cfg = list(weight_cfg)
+        if not isinstance(weight_cfg, list):
+            raise TypeError(
+                f'{name} must be float/int or list/tuple of floats, got {type(weight_cfg)}')
+        if len(weight_cfg) == 1:
+            return [float(weight_cfg[0]) for _ in range(num_levels)]
+        if len(weight_cfg) != num_levels:
+            raise ValueError(
+                f'{name} length mismatch: expected 1 or {num_levels}, got {len(weight_cfg)}')
+        return [float(v) for v in weight_cfg]
 
     def _normalize_points_list(self, points):
         if points is None:
@@ -191,9 +218,42 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             normalized.append(pts)
         return normalized
 
-    def _extract_external_img_feat(self, img, points, img_metas, mapanything_extra=None):
+    def _run_external_img_encoder(self, img, points, img_metas, mapanything_extra=None):
         points = self._normalize_points_list(points)
-        img_feats = self.img_encoder(
+        if self._freeze_img_encoder:
+            with torch.no_grad():
+                return self.img_encoder(
+                    img,
+                    points=points,
+                    img_metas=img_metas,
+                    mapanything_extra=mapanything_extra)
+        return self.img_encoder(
+            img,
+            points=points,
+            img_metas=img_metas,
+            mapanything_extra=mapanything_extra)
+
+    def _extract_external_img_feat_tensor(self, img, points, img_metas, mapanything_extra=None):
+        img_feats = self._run_external_img_encoder(
+            img,
+            points=points,
+            img_metas=img_metas,
+            mapanything_extra=mapanything_extra)
+        if isinstance(img_feats, (list, tuple)):
+            if len(img_feats) == 1 and isinstance(img_feats[0], torch.Tensor):
+                img_feats = img_feats[0]
+            else:
+                raise ValueError(
+                    'External img encoder must output a single Tensor[B, TN, C, H, W] '
+                    'when img_feature_fusion is enabled.')
+        if not isinstance(img_feats, torch.Tensor) or img_feats.dim() != 5:
+            raise ValueError(
+                'External img encoder output must be Tensor[B, TN, C, H, W], '
+                f"but got type={type(img_feats)} shape={getattr(img_feats, 'shape', None)}")
+        return img_feats
+
+    def _extract_external_img_feat(self, img, points, img_metas, mapanything_extra=None):
+        img_feats = self._run_external_img_encoder(
             img,
             points=points,
             img_metas=img_metas,
@@ -224,28 +284,76 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                     f"got type={type(feat)} shape={getattr(feat, 'shape', None)}")
         return list(img_feats)
 
+    def _interpolate_external_feat(self, feat_2d, target_hw):
+        if feat_2d.shape[-2:] == target_hw:
+            return feat_2d
+        if self.img_fusion_interp_mode in ('nearest', 'area', 'nearest-exact'):
+            return F.interpolate(
+                feat_2d,
+                size=target_hw,
+                mode=self.img_fusion_interp_mode)
+        return F.interpolate(
+            feat_2d,
+            size=target_hw,
+            mode=self.img_fusion_interp_mode,
+            align_corners=self.img_fusion_align_corners)
+
+    def _fuse_img_features(self, fpn_feats, external_feat):
+        if not isinstance(fpn_feats, (list, tuple)) or len(fpn_feats) == 0:
+            raise ValueError('fpn_feats must be a non-empty list of image features')
+        if self.img_fusion_proj is None:
+            return list(fpn_feats)
+        if not isinstance(external_feat, torch.Tensor) or external_feat.dim() != 5:
+            raise ValueError(
+                'external_feat must be Tensor[B, TN, C, H, W], '
+                f'but got type={type(external_feat)} shape={getattr(external_feat, "shape", None)}')
+
+        B_ext, TN_ext, C_ext, H_ext, W_ext = external_feat.shape
+        ext_feat_2d = external_feat.reshape(B_ext * TN_ext, C_ext, H_ext, W_ext)
+        ext_feat_2d = ext_feat_2d.to(dtype=self.img_fusion_proj.weight.dtype)
+        ext_feat_proj_2d = self.img_fusion_proj(ext_feat_2d)
+        proj_channels = ext_feat_proj_2d.shape[1]
+
+        num_levels = len(fpn_feats)
+        alpha = self._get_level_weights(
+            self.img_feature_fusion_cfg.get('alpha', 1.0),
+            num_levels=num_levels,
+            name='img_feature_fusion.alpha')
+        beta = self._get_level_weights(
+            self.img_feature_fusion_cfg.get('beta', 0.0),
+            num_levels=num_levels,
+            name='img_feature_fusion.beta')
+
+        fused_feats = []
+        for lvl, fpn_feat in enumerate(fpn_feats):
+            if not isinstance(fpn_feat, torch.Tensor) or fpn_feat.dim() != 5:
+                raise ValueError(
+                    f'FPN feature level {lvl} must be Tensor[B, TN, C, H, W], '
+                    f'got type={type(fpn_feat)} shape={getattr(fpn_feat, "shape", None)}')
+            B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn = fpn_feat.shape
+            if B_fpn != B_ext or TN_fpn != TN_ext:
+                raise ValueError(
+                    f'Feature batch/TN mismatch at level {lvl}: '
+                    f'fpn={tuple(fpn_feat.shape[:2])}, external={(B_ext, TN_ext)}')
+            if C_fpn != proj_channels:
+                raise ValueError(
+                    f'Feature channel mismatch at level {lvl}: '
+                    f'fpn C={C_fpn}, projected external C={proj_channels}. '
+                    'Please check img_neck out_channels and img_feature_fusion.map_in_channels.')
+            ext_lvl_2d = self._interpolate_external_feat(
+                ext_feat_proj_2d,
+                target_hw=(H_fpn, W_fpn))
+            ext_lvl = ext_lvl_2d.view(B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn)
+            ext_lvl = ext_lvl.to(dtype=fpn_feat.dtype)
+            fused = alpha[lvl] * fpn_feat + beta[lvl] * ext_lvl
+            fused_feats.append(fused)
+        return fused_feats
+
     def _extract_pts_feat_for_head(self, points):
         if (not self.enable_pts_feature_branch) or (not self.with_pts_backbone):
             return None
         pts_feats = self.extract_pts_feat(points)
         return self.final_conv(pts_feats[0])
-
-    @staticmethod
-    def _freeze_module(module):
-        if module is None:
-            return
-        for parameter in module.parameters():
-            parameter.requires_grad = False
-        module.eval()
-
-    def _need_img_branch(self):
-        return self.with_img_backbone
-
-    def train(self, mode=True):
-        super().train(mode)
-        if self.use_external_img_encoder and self.img_encoder is not None:
-            self.img_encoder.eval()
-        return self
 
     @torch.no_grad()
     def voxelize(self, points):
@@ -281,100 +389,16 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         return img_feats
 
-<<<<<<< HEAD
-=======
-    def _resolve_fusion_weights(self, num_levels, key, default):
-        value = self.img_feature_fusion.get(key, default)
-        if isinstance(value, (int, float)):
-            return [float(value)] * num_levels
-        if not isinstance(value, (list, tuple)):
-            raise TypeError(f'img_feature_fusion[{key}] must be scalar or list/tuple, got {type(value)}')
-        if len(value) != num_levels:
-            raise ValueError(
-                f'img_feature_fusion[{key}] must have length {num_levels}, got {len(value)}')
-        return [float(v) for v in value]
-
-    def _extract_external_img_feat(self, img, points=None, img_metas=None, mapanything_extra=None):
-        if self.img_encoder is None:
-            return None
-        with torch.no_grad():
-            feats = self.img_encoder(
-                img=img,
-                points=points,
-                img_metas=img_metas,
-                mapanything_extra=mapanything_extra)
-        if isinstance(feats, (list, tuple)):
-            if len(feats) != 1:
-                raise ValueError(
-                    'External img encoder output must be Tensor[B, TN, C, H, W] '
-                    f'or single-element list, but got len={len(feats)}')
-            feats = feats[0]
-        if not isinstance(feats, torch.Tensor) or feats.dim() != 5:
-            raise ValueError(
-                'External img encoder output must be Tensor[B, TN, C, H, W] '
-                f'but got type={type(feats)} shape={getattr(feats, "shape", None)}')
-        return feats
-
-    def _apply_img_feature_fusion(self, img_feats, external_feat):
-        if external_feat is None:
-            return img_feats
-        if not isinstance(img_feats, (list, tuple)):
-            raise TypeError(f'img_neck output must be list/tuple, got {type(img_feats)}')
-        if len(img_feats) == 0:
-            return list(img_feats)
-
-        alpha = self._resolve_fusion_weights(len(img_feats), 'alpha', 1.0)
-        beta = self._resolve_fusion_weights(len(img_feats), 'beta', 0.0)
-        align_corners = self._fusion_align_corners if self._fusion_interp_mode in (
-            'linear', 'bilinear', 'bicubic', 'trilinear') else None
-
-        bsz, total_views = external_feat.shape[:2]
-        map_feat = external_feat.reshape(-1, *external_feat.shape[2:])
-        map_feat = self.img_fusion_proj(map_feat)
-        map_feat = map_feat.reshape(
-            bsz,
-            total_views,
-            map_feat.shape[1],
-            map_feat.shape[2],
-            map_feat.shape[3])
-
-        fused_feats = []
-        for lvl, img_feat in enumerate(img_feats):
-            if not isinstance(img_feat, torch.Tensor) or img_feat.dim() != 4:
-                raise ValueError(
-                    f'Image feature at level {lvl} must be Tensor[BN,C,H,W], got type={type(img_feat)}')
-            bn, channels, feat_h, feat_w = img_feat.shape
-            if bn % bsz != 0:
-                raise ValueError(
-                    f'Invalid BN={bn} for batch={bsz} at level {lvl}')
-            current_views = bn // bsz
-
-            main_feat = img_feat.view(bsz, current_views, channels, feat_h, feat_w)
-            if current_views != total_views:
-                raise ValueError(
-                    f'View count mismatch at level {lvl}: FPN has {current_views}, '
-                    f'external encoder has {total_views}')
-
-            resized_map = F.interpolate(
-                map_feat.reshape(-1, map_feat.shape[2], map_feat.shape[3], map_feat.shape[4]),
-                size=(feat_h, feat_w),
-                mode=self._fusion_interp_mode,
-                align_corners=align_corners)
-            resized_map = resized_map.reshape(bsz, current_views, channels, feat_h, feat_w)
-            fused = alpha[lvl] * main_feat + beta[lvl] * resized_map
-            fused_feats.append(fused.reshape(bn, channels, feat_h, feat_w))
-        return fused_feats
-
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
     def extract_img_feat(self, img, img_metas, points=None, mapanything_extra=None):
         if isinstance(img, list):
             img = torch.stack(img, dim=0)
 
         assert img.dim() == 5
+        img_for_external = img
 
         if self.use_external_img_encoder:
             return self._extract_external_img_feat(
-                img,
+                img_for_external,
                 points=points,
                 img_metas=img_metas,
                 mapanything_extra=mapanything_extra)
@@ -383,15 +407,10 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img = img.view(B * N, C, H, W)
         img = img.float()
 
-        external_img = img.view(B, N, C, H, W) if self.use_external_img_encoder else None
-
         # move some augmentations to GPU
         if self.data_aug is not None:
             if 'img_color_aug' in self.data_aug and self.data_aug['img_color_aug'] and self.training:
                 img = self.color_aug(img)
-
-            if self.use_external_img_encoder:
-                external_img = img.view(B, N, C, img.shape[-2], img.shape[-1]).contiguous()
 
             if 'img_norm_cfg' in self.data_aug:
                 img_norm_cfg = self.data_aug['img_norm_cfg']
@@ -444,20 +463,18 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         else:
             img_feats = self.extract_img_feat_(img)
 
-        if self.use_external_img_encoder:
-            if external_img is None:
-                external_img = img.view(B, N, C, img.shape[-2], img.shape[-1])
-            external_feat = self._extract_external_img_feat(
-                external_img,
-                points=points,
-                img_metas=img_metas,
-                mapanything_extra=mapanything_extra)
-            img_feats = self._apply_img_feature_fusion(img_feats, external_feat)
-
         img_feats_reshaped = []
         for img_feat in img_feats:
             BN, C, H, W = img_feat.size()
             img_feats_reshaped.append(img_feat.view(B, int(BN / B), C, H, W))
+
+        if self.use_img_feature_fusion:
+            external_feat = self._extract_external_img_feat_tensor(
+                img_for_external,
+                points=points,
+                img_metas=img_metas,
+                mapanything_extra=mapanything_extra)
+            img_feats_reshaped = self._fuse_img_features(img_feats_reshaped, external_feat)
 
         return img_feats_reshaped
     
@@ -510,7 +527,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             img_metas=img_metas,
             voxel_semantics=voxel_semantics,
             mask_camera=mask_camera,
-            mapanything_extra=mapanything_extra,
         )
 
     def predict(self, inputs, data_samples, rescale=False):
@@ -518,17 +534,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         points = inputs.get('points') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
         img_metas = self._collect_img_metas(data_samples)
-<<<<<<< HEAD
         return self.simple_test(img_metas, img, points, rescale=rescale,
                                 mapanything_extra=mapanything_extra)
-=======
-        return self.simple_test(
-            img_metas,
-            img,
-            points,
-            mapanything_extra=mapanything_extra,
-            rescale=rescale)
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
     def forward_train(self,
                       points=None,
@@ -544,8 +551,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                       img_depth=None,
                       img_mask=None,
                       voxel_semantics=None,
-                      mask_camera=None,
-                      mapanything_extra=None):
+                      mask_camera=None):
         """Forward training function.
         Args:
             points (list[torch.Tensor], optional): Points of each sample.
@@ -569,7 +575,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
-<<<<<<< HEAD
         img_feats = self.extract_img_feat(
             img,
             img_metas,
@@ -577,17 +582,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             mapanything_extra=mapanything_extra) \
             if self._need_img_branch() else None
         pts_feats = self._extract_pts_feat_for_head(points)
-=======
-        img_feats = None if not self._need_img_branch() else \
-            self.extract_img_feat(
-                img,
-                img_metas,
-                points=points,
-                mapanything_extra=mapanything_extra)
-        pts_feats = None if not self.with_pts_backbone else \
-            self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         debug_is_finite('img_feats', img_feats)
         debug_is_finite('pts_feats', pts_feats)
 
@@ -631,7 +625,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                     img_metas,
                     img=None,
                     points=None,
-<<<<<<< HEAD
                     rescale=False,
                     mapanything_extra=None):
         if self._can_use_online_test(img_metas, img):
@@ -647,15 +640,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             points,
             rescale,
             mapanything_extra=mapanything_extra)
-=======
-                    mapanything_extra=None,
-                    rescale=False):
-        if self._can_use_online_test(img_metas, img):
-            return self.simple_test_online(
-                img_metas, img, points, mapanything_extra=mapanything_extra, rescale=rescale)
-        return self.simple_test_offline(
-            img_metas, img, points, mapanything_extra=mapanything_extra, rescale=rescale)
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
     def _collect_img_metas(self, data_samples):
         if not data_samples:
@@ -677,7 +661,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             return None
         if isinstance(mapanything_extra, dict):
             return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
-<<<<<<< HEAD
         if isinstance(mapanything_extra, tuple):
             mapanything_extra = list(mapanything_extra)
         if not isinstance(mapanything_extra, list):
@@ -697,29 +680,11 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             else:
                 raise TypeError(
                     f'Each mapanything_extra item must be dict/None, got {type(item)}')
-=======
-        if not isinstance(mapanything_extra, (list, tuple)):
-            raise TypeError(
-                f'mapanything_extra must be None, dict, or list of dict, but got {type(mapanything_extra)}')
-        extras = list(mapanything_extra)
-        if len(extras) != batch_size:
-            raise ValueError(
-                f'mapanything_extra batch size mismatch: got {len(extras)}, expected {batch_size}')
-        normalized = []
-        for item in extras:
-            if item is None:
-                normalized.append({})
-                continue
-            if not isinstance(item, dict):
-                raise TypeError(f'Each mapanything_extra item must be dict/None, got {type(item)}')
-            normalized.append(copy.deepcopy(item))
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         return normalized
 
     def _slice_mapanything_extra(self, mapanything_extra, img_indices, total_views):
         if mapanything_extra is None:
             return None
-<<<<<<< HEAD
 
         sliced = []
         for sample_extra in mapanything_extra:
@@ -733,19 +698,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             views = sample_out.get('views', None)
             if isinstance(views, (list, tuple)) and len(views) == total_views:
                 sample_out['views'] = [views[j] for j in img_indices]
-=======
-        sliced = []
-        for sample_extra in mapanything_extra:
-            sample_out = {}
-            for key, value in sample_extra.items():
-                if key != 'views':
-                    sample_out[key] = value
-                    continue
-                if isinstance(value, (list, tuple)) and len(value) == total_views:
-                    sample_out[key] = [value[j] for j in img_indices]
-                else:
-                    sample_out[key] = value
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
             sliced.append(sample_out)
         return sliced
 
@@ -753,7 +705,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                             img_metas,
                             img=None,
                             points=None,
-<<<<<<< HEAD
                             rescale=False,
                             mapanything_extra=None):
         img_feats = self.extract_img_feat(
@@ -763,19 +714,6 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             mapanything_extra=mapanything_extra) \
             if self._need_img_branch() else None
         pts_feats = self._extract_pts_feat_for_head(points)
-=======
-                            mapanything_extra=None,
-                            rescale=False):
-        img_feats = None if not self._need_img_branch() else \
-            self.extract_img_feat(
-                img,
-                img_metas,
-                points=points,
-                mapanything_extra=mapanything_extra)
-        pts_feats = None if not self.with_pts_backbone else \
-            self.extract_pts_feat(points)
-        pts_feats = self.final_conv(pts_feats[0])
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
         outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
                                   img_metas=img_metas, points=points)
@@ -785,20 +723,14 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                            img_metas,
                            img=None,
                            points=None,
-<<<<<<< HEAD
                            rescale=False,
                            mapanything_extra=None):
-=======
-                           mapanything_extra=None,
-                           rescale=False):
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         assert len(img_metas) == 1  # batch_size = 1
 
         B, N, C, H, W = img.shape
         mapanything_extra = self._normalize_mapanything_extra(mapanything_extra, B)
         num_views = self._get_num_views()
         img = img.reshape(B, N // num_views, num_views, C, H, W)
-        extra_batch = self._normalize_mapanything_extra(mapanything_extra, B)
 
         img_filenames = img_metas[0]['filename']
         num_frames = len(img_filenames) // num_views
@@ -812,7 +744,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img_feats_list, img_metas_list = [], []
 
         # extract feature frame by frame
-        allow_cache = not (self.use_external_img_encoder and not self.external_img_cache)
+        uses_external_encoder = self.use_external_img_encoder or self.use_img_feature_fusion
+        allow_cache = not (uses_external_encoder and not self.external_img_cache)
         if mapanything_extra is not None:
             # Optional extra modalities can change feature semantics even for same filename.
             allow_cache = False
@@ -836,29 +769,17 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 img_feats_curr = self.memory[img_filenames[img_indices[0]]]
             else:
                 # extract feature and put into memory
-<<<<<<< HEAD
-=======
-                extra_curr = self._slice_mapanything_extra(extra_batch, img_indices, len(img_filenames))
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
                 img_feats_curr = self.extract_img_feat(
                     img[:, i],
                     img_metas_curr,
                     points=points,
                     mapanything_extra=extra_curr)
-<<<<<<< HEAD
                 if allow_cache:
                     self.memory[img_filenames[img_indices[0]]] = img_feats_curr
                     self.queue.put(img_filenames[img_indices[0]])
                     while self.queue.qsize() >= 16:  # avoid OOM
                         pop_key = self.queue.get()
                         self.memory.pop(pop_key)
-=======
-                self.memory[img_filenames[img_indices[0]]] = img_feats_curr
-                self.queue.put(img_filenames[img_indices[0]])
-                while self.queue.qsize() >= 16:  # avoid OOM
-                    pop_key = self.queue.get()
-                    self.memory.pop(pop_key)
->>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
             img_feats_list.append(img_feats_curr)
             img_metas_list.append(img_metas_curr)
