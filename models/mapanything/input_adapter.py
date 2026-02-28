@@ -5,20 +5,30 @@ import torch
 
 
 class OPUSToMapAnythingInputAdapter:
+<<<<<<< HEAD
     """Adapt OPUS batch tensors to MapAnything-style list[view-dict] inputs."""
 
     _DEFAULT_META_KEYS = (
+=======
+    """Adapt OPUS tensor inputs to MapAnything view-dict inputs."""
+
+    _DEFAULT_META_KEYS = (
+        'ego2img',
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         'filename',
         'img_shape',
         'ori_shape',
         'pad_shape',
         'img_timestamp',
+<<<<<<< HEAD
         'ego2img',
         'ego2occ',
         'ego2lidar',
         'sample_token',
         'scene_name',
         'sample_idx',
+=======
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
     )
 
     def __init__(self,
@@ -36,18 +46,27 @@ class OPUSToMapAnythingInputAdapter:
 
         self.lidar_injection = lidar_injection
         self.tn_align_mode = tn_align_mode
+<<<<<<< HEAD
         self.preserve_meta_keys = tuple(preserve_meta_keys or self._DEFAULT_META_KEYS)
+=======
+        self.preserve_meta_keys = tuple(
+            preserve_meta_keys if preserve_meta_keys else self._DEFAULT_META_KEYS)
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
     def _normalize_points(self, points, batch_size):
         if points is None:
             return None
+<<<<<<< HEAD
 
+=======
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         if isinstance(points, torch.Tensor):
             if points.dim() == 3 and points.shape[0] == batch_size:
                 return [points[i] for i in range(batch_size)]
             if points.dim() == 2 and batch_size == 1:
                 return [points]
             raise TypeError(
+<<<<<<< HEAD
                 'points tensor input must have shape [B, N, C] when passed as Tensor, '
                 f'but got {tuple(points.shape)}')
 
@@ -67,18 +86,43 @@ class OPUSToMapAnythingInputAdapter:
                 pts = pts.tensor
             normalized.append(pts)
         return normalized
+=======
+                'points Tensor input must have shape [N, C] or [B, N, C] '
+                f'when passed to external img encoder, but got {tuple(points.shape)}')
+        if isinstance(points, (list, tuple)):
+            points_list = list(points)
+            if len(points_list) != batch_size:
+                raise ValueError(
+                    f'points batch size mismatch: got {len(points_list)} samples '
+                    f'but expected {batch_size}')
+            normalized = []
+            for pts in points_list:
+                if hasattr(pts, 'tensor'):
+                    pts = pts.tensor
+                normalized.append(pts)
+            return normalized
+        raise TypeError(
+            'points for external img encoder must be None, Tensor[B,N,C], or '
+            f'list of tensors, but got {type(points)}')
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
 
     def _normalize_mapanything_extra(self, mapanything_extra, batch_size):
         if mapanything_extra is None:
             return [dict() for _ in range(batch_size)]
+<<<<<<< HEAD
 
         if isinstance(mapanything_extra, dict):
             return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
 
+=======
+        if isinstance(mapanything_extra, dict):
+            return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         if not isinstance(mapanything_extra, (list, tuple)):
             raise TypeError(
                 'mapanything_extra must be None, dict, or list/tuple of dict, '
                 f'but got {type(mapanything_extra)}')
+<<<<<<< HEAD
 
         mapanything_extra = list(mapanything_extra)
         if len(mapanything_extra) != batch_size:
@@ -96,6 +140,23 @@ class OPUSToMapAnythingInputAdapter:
                 raise TypeError(
                     'Each mapanything_extra item must be dict/None, '
                     f'but got {type(item)}')
+=======
+        extras = list(mapanything_extra)
+        if len(extras) != batch_size:
+            raise ValueError(
+                f'mapanything_extra batch size mismatch: got {len(extras)} samples, '
+                f'expected {batch_size}')
+        normalized = []
+        for item in extras:
+            if item is None:
+                normalized.append(dict())
+                continue
+            if not isinstance(item, dict):
+                raise TypeError(
+                    'Each mapanything_extra item must be dict/None, '
+                    f'but got {type(item)}')
+            normalized.append(copy.deepcopy(item))
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         return normalized
 
     def _align_extra_views(self, views_extra, target_tn):
@@ -109,11 +170,17 @@ class OPUSToMapAnythingInputAdapter:
         cur_tn = len(views_extra)
         if cur_tn == target_tn:
             return views_extra
+<<<<<<< HEAD
 
         if self.tn_align_mode == 'strict':
             raise ValueError(
                 f'mapanything_extra views length mismatch: expected TN={target_tn}, got {cur_tn}')
 
+=======
+        if self.tn_align_mode == 'strict':
+            raise ValueError(
+                f'mapanything_extra views length mismatch: expected TN={target_tn}, got {cur_tn}')
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         if self.tn_align_mode == 'truncate_tail':
             if cur_tn < target_tn:
                 raise ValueError(
@@ -124,6 +191,7 @@ class OPUSToMapAnythingInputAdapter:
             return views_extra[:target_tn]
 
         # pad_last mode
+<<<<<<< HEAD
         if cur_tn > target_tn:
             warnings.warn(
                 f'Truncating mapanything_extra views from {cur_tn} to {target_tn}.',
@@ -149,6 +217,31 @@ class OPUSToMapAnythingInputAdapter:
             return value[idx]
         if hasattr(value, 'shape') and len(value.shape) > 0 and value.shape[0] == total_views:
             return value[idx]
+=======
+        if cur_tn <= 0:
+            return [dict() for _ in range(target_tn)]
+        warnings.warn(
+            f'Padding mapanything_extra views from {cur_tn} to {target_tn}.',
+            stacklevel=2)
+        pad = [copy.deepcopy(views_extra[-1]) for _ in range(target_tn - cur_tn)]
+        return views_extra + pad
+
+    def _slice_meta_value(self, value, idx, total_views):
+        if isinstance(value, list):
+            if len(value) == total_views:
+                return value[idx]
+            return value
+        if isinstance(value, tuple):
+            if len(value) == total_views:
+                return value[idx]
+            return value
+        if hasattr(value, 'shape'):
+            try:
+                if int(value.shape[0]) == total_views:
+                    return value[idx]
+            except Exception:
+                return value
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         return value
 
     def _merge_view_extra(self, base_view, view_extra):
@@ -159,6 +252,7 @@ class OPUSToMapAnythingInputAdapter:
                 f'Each view-level extra must be dict/None, got {type(view_extra)}')
         if 'img' in view_extra:
             raise KeyError('mapanything_extra.views[*] must not override the "img" field')
+<<<<<<< HEAD
         merged = dict(base_view)
         merged.update(view_extra)
         return merged
@@ -172,11 +266,26 @@ class OPUSToMapAnythingInputAdapter:
         batch_size, total_views, channels, _, _ = img.shape
         if channels != 3:
             raise ValueError(f'Expected 3-channel image tensor, got C={channels}')
+=======
+        base_view.update(view_extra)
+        return base_view
+
+    def __call__(self, img, points=None, img_metas=None, mapanything_extra=None):
+        if not isinstance(img, torch.Tensor) or img.dim() != 5:
+            raise ValueError(
+                'img must be Tensor[B, TN, C, H, W], got type='
+                f'{type(img)} shape={getattr(img, "shape", None)}')
+
+        batch_size, total_views = img.shape[:2]
+        if img_metas is None:
+            img_metas = [{} for _ in range(batch_size)]
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         if not isinstance(img_metas, list) or len(img_metas) != batch_size:
             raise ValueError(
                 f'img_metas must be list of length B={batch_size}, got {type(img_metas)}')
 
         points_list = self._normalize_points(points, batch_size)
+<<<<<<< HEAD
         extra_list = self._normalize_mapanything_extra(mapanything_extra, batch_size)
 
         batch_views = []
@@ -206,4 +315,39 @@ class OPUSToMapAnythingInputAdapter:
                 sample_views.append(view)
 
             batch_views.append(sample_views)
+=======
+        extras = self._normalize_mapanything_extra(mapanything_extra, batch_size)
+
+        batch_views = []
+        for b in range(batch_size):
+            sample_meta = img_metas[b] if isinstance(img_metas[b], dict) else {}
+            sample_extra = extras[b]
+            shared_extra = {
+                k: v for k, v in sample_extra.items() if k != 'views'
+            }
+            view_extras = self._align_extra_views(sample_extra.get('views', None), total_views)
+
+            sample_views = []
+            for t in range(total_views):
+                # MapAnything preprocess expects HWC tensors / arrays as raw images.
+                view_img = img[b, t].permute(1, 2, 0).contiguous()
+                view = {'img': view_img}
+                for key in self.preserve_meta_keys:
+                    if key in sample_meta:
+                        view[key] = self._slice_meta_value(sample_meta[key], t, total_views)
+
+                if points_list is not None and self.lidar_injection in ('per_view', 'both'):
+                    view['points'] = points_list[b]
+
+                view.update(shared_extra)
+                view = self._merge_view_extra(view, view_extras[t])
+                sample_views.append(view)
+
+            if points_list is not None and self.lidar_injection in ('shared', 'both'):
+                for view in sample_views:
+                    view['points_shared'] = points_list[b]
+
+            batch_views.append(sample_views)
+
+>>>>>>> b8cc5df (mapanything 融合分支开发完成，提交初始版本。特种融合只包含图像，res+map 直接求和 双线性差值 主要改动包括：)
         return batch_views
