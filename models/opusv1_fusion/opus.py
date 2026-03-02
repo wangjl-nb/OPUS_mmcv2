@@ -92,6 +92,10 @@ class OPUSV1Fusion(MVXTwoStageDetector):
              and self.img_feature_fusion_cfg.get('freeze_img_encoder', True)))
 
         self.img_fusion_proj = None
+        self.img_fusion_concat_proj = None
+        self.img_fusion_concat_act = None
+        self.img_fusion_concat_se = None
+        self.img_fusion_mode = 'weighted_sum'
         self.img_fusion_interp_mode = 'bilinear'
         self.img_fusion_align_corners = False
         if self.use_img_feature_fusion:
@@ -108,6 +112,43 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 stride=1,
                 padding=0,
                 bias=True)
+            self.img_fusion_mode = str(
+                self.img_feature_fusion_cfg.get('mode', 'weighted_sum')).lower()
+            valid_fusion_modes = ('weighted_sum', 'concat_proj')
+            if self.img_fusion_mode not in valid_fusion_modes:
+                raise ValueError(
+                    f'img_feature_fusion.mode must be one of {valid_fusion_modes}, '
+                    f'got {self.img_fusion_mode}')
+            if self.img_fusion_mode == 'concat_proj':
+                self.img_fusion_concat_proj = nn.Conv2d(
+                    fusion_out_channels * 2,
+                    fusion_out_channels,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                    bias=True)
+                if bool(self.img_feature_fusion_cfg.get('concat_use_act', True)):
+                    self.img_fusion_concat_act = nn.ReLU(inplace=True)
+                concat_se_reduction = int(
+                    self.img_feature_fusion_cfg.get('concat_se_reduction', 16))
+                concat_se_min_channels = int(
+                    self.img_feature_fusion_cfg.get('concat_se_min_channels', 8))
+                if concat_se_reduction <= 0:
+                    raise ValueError(
+                        f'concat_se_reduction must be positive, got {concat_se_reduction}')
+                if concat_se_min_channels <= 0:
+                    raise ValueError(
+                        f'concat_se_min_channels must be positive, got {concat_se_min_channels}')
+                concat_se_hidden = max(
+                    fusion_out_channels // concat_se_reduction,
+                    concat_se_min_channels)
+                self.img_fusion_concat_se = nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Conv2d(fusion_out_channels, concat_se_hidden, kernel_size=1, bias=True),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(concat_se_hidden, fusion_out_channels, kernel_size=1, bias=True),
+                    nn.Sigmoid(),
+                )
             self.img_fusion_interp_mode = self.img_feature_fusion_cfg.get('interp_mode', 'bilinear')
             self.img_fusion_align_corners = bool(
                 self.img_feature_fusion_cfg.get('align_corners', False))
@@ -345,7 +386,27 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 target_hw=(H_fpn, W_fpn))
             ext_lvl = ext_lvl_2d.view(B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn)
             ext_lvl = ext_lvl.to(dtype=fpn_feat.dtype)
-            fused = alpha[lvl] * fpn_feat + beta[lvl] * ext_lvl
+            if self.img_fusion_mode == 'weighted_sum':
+                fused = alpha[lvl] * fpn_feat + beta[lvl] * ext_lvl
+            else:
+                if self.img_fusion_concat_proj is None:
+                    raise RuntimeError(
+                        'img_fusion_concat_proj is not initialized while mode=concat_proj')
+                concat_2d = torch.cat(
+                    [
+                        (alpha[lvl] * fpn_feat).reshape(B_fpn * TN_fpn, C_fpn, H_fpn, W_fpn),
+                        (beta[lvl] * ext_lvl).reshape(B_fpn * TN_fpn, C_fpn, H_fpn, W_fpn),
+                    ],
+                    dim=1)
+                concat_2d = concat_2d.to(dtype=self.img_fusion_concat_proj.weight.dtype)
+                fused_2d = self.img_fusion_concat_proj(concat_2d)
+                if self.img_fusion_concat_act is not None:
+                    fused_2d = self.img_fusion_concat_act(fused_2d)
+                if self.img_fusion_concat_se is None:
+                    raise RuntimeError(
+                        'img_fusion_concat_se is not initialized while mode=concat_proj')
+                fused_2d = fused_2d * self.img_fusion_concat_se(fused_2d)
+                fused = fused_2d.view(B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn).to(dtype=fpn_feat.dtype)
             fused_feats.append(fused)
         return fused_feats
 

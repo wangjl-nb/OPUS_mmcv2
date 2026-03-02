@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_0.1/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -84,7 +84,7 @@ dataset_cfg = dict(
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
 num_layers = 6
-num_query = 9600  # Main occupancy query budget.
+num_query = 4800  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
@@ -129,7 +129,7 @@ img_encoder = dict(
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,
 )
 img_feature_fusion = dict(
-    mode='concat_proj',  # options: ['weighted_sum', 'concat_proj']
+    mode='weighted_sum',  # options: ['weighted_sum', 'concat_proj']
     alpha=[0.5, 0.5, 0.5, 0.5],
     beta=[0.5, 0.5, 0.5, 0.5],
     concat_use_act=True,

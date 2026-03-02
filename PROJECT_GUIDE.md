@@ -294,10 +294,15 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 - 融合前：MapAnything 输出单尺度 `M[B,TN,Cm,Hm,Wm]`，先经 `1x1 conv` 投影到 `embed_dims` 得到 `M'`。
 - 对 FPN 每层 `i`（共 4 层）：
   - `M_i = Interpolate(M', size=F_i_hw, mode=interp_mode, align_corners=...)`
-  - `Fuse_i = alpha_i * F_i + beta_i * M_i`
+  - `mode='weighted_sum'`：`Fuse_i = alpha_i * F_i + beta_i * M_i`
+  - `mode='concat_proj'`：`Fuse_i = SE(ReLU(Conv1x1(Concat(alpha_i * F_i, beta_i * M_i))))`（通道维 concat 后映射回原始 `embed_dims`，再做通道注意力）
 - 配置入口：`model.img_feature_fusion`
+  - `mode`: `weighted_sum` 或 `concat_proj`
   - `alpha`: 每层主分支权重（长度 4）
   - `beta`: 每层 MapAnything 权重（长度 4）
+  - `concat_use_act`: `concat_proj` 中 `Conv1x1` 后是否加 ReLU（默认 `True`）
+  - `concat_se_reduction`: `SE` 降维倍率（默认 `16`）
+  - `concat_se_min_channels`: `SE` 隐层最小通道（默认 `8`）
   - `interp_mode`: 默认 `bilinear`
   - `align_corners`: 默认 `False`
 
