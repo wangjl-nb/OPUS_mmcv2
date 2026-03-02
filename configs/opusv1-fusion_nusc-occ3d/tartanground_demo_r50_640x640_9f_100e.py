@@ -50,7 +50,7 @@ cls_weights = [
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
 pc_voxel_size = [0.05, 0.05, 0.05]
-voxel_size = [0.2, 0.2, 0.2]
+voxel_size = [0.05, 0.05, 0.05]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
@@ -84,14 +84,14 @@ dataset_cfg = dict(
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
 num_layers = 6
-num_query = 4800  # Main occupancy query budget.
+num_query = 9600  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
 num_refines = [
                 1,
-                2,
-                8,
+                4,
+                16,
                 32,
                 64,
                 128,
@@ -185,7 +185,7 @@ model = dict(
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
-        img_pad_cfg=dict(size_divisor=8)),
+        img_pad_cfg=dict(size_divisor=32)),
     stop_prev_grad=0,
     img_backbone=img_backbone,
     img_neck=img_neck,
@@ -242,7 +242,7 @@ model = dict(
             # Base long-tail priors.
             cls_weights=cls_weights,  # Per-class static re-weight for classification.
             rare_classes=rare_classes,  # Fallback tail class ids.
-            rare_weights=2,  # Legacy rare-class minimum regression weight.
+            rare_weights=12,  # Legacy rare-class minimum regression weight.
             hard_camera_mask=True,  # Only keep camera-visible voxels as GT anchors.
 
             # Phase-1: tail-aware dynamic weighting (enabled by default).
@@ -255,7 +255,7 @@ model = dict(
                 max_tail_classes=24,  # Cap tail set size.
                 sync_stats=True,  # All-reduce class stats in DDP.
                 fallback='rare_classes',  # Use rare_classes when EMA result is unstable/empty.
-                tail_weight=2,  # Extra weight multiplier/min-clamp for tail samples.
+                tail_weight=12,  # Extra weight multiplier/min-clamp for tail samples.
             ),
 
             # Phase-1: pred->gt regression hard mining.
@@ -334,7 +334,7 @@ test_pipeline = [
         'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
-batch_size = 32
+batch_size = 16
 
 train_dataloader = dict(
     batch_size=batch_size,
