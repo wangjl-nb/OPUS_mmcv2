@@ -13,7 +13,9 @@ depth_points_cfg = dict(
     max_points_total=560000,
     depth_min=0.01,
     depth_max=30.0,
-    coord_convention='tartanair_ned',
+    # Tartanground camera extrinsics are consistent with OpenCV camera frame:
+    # x right, y down, z forward. This matches LiDAR frame mapping better.
+    coord_convention='opencv',
     load_dim=5,
     use_dim=[0, 1, 2, 3, 4],
     time_dim=4,

@@ -2,8 +2,8 @@ default_scope = 'mmdet3d'
 custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
-dataset_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/gts_0.2/'
+dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -19,57 +19,31 @@ object_names = [
     'motorcycle', 'bicycle', 'pedestrian', 'traffic_cone'
 ]
 
-occ_names = [
-    'others', 'acousticceiling', 'airconditiongvent', 'atm', 'awning', 'bakerycounter',
-    'bannersign', 'barcounter', 'barrel', 'barshelf', 'beam', 'bed',
-    'bench', 'bleach', 'blinds', 'boatcovered', 'book', 'boxedfood',
-    'boxedlaundrydetergent', 'bp', 'building', 'buildingtunnel', 'cabinet', 'cabinets',
-    'cable', 'cabledrum', 'cameraactor', 'car', 'carpet', 'cashregister',
-    'ceiling', 'cementcolumn', 'chain', 'chair', 'chairs', 'chasis',
-    'childactor', 'chipscylinder', 'cieling', 'cleaningpowder', 'column', 'concretebarricade',
-    'couch', 'counch', 'cranerail', 'cucumbers', 'cupboard', 'curtain',
-    'decorativecookiebox', 'desk', 'donuts', 'door', 'doorway', 'dumpster',
-    'elevator', 'elevatordoor', 'fabricsoftener', 'fence', 'fencecolumn', 'floor',
-    'flowerpot', 'fluorescentlight', 'foldingscreen', 'frozenfoodbagged', 'fryingoil', 'garagedoor',
-    'garbagecan', 'gate', 'grass', 'ground', 'handtruck', 'heater',
-    'instancedfoliageactor', 'ivy', 'laboratorytable', 'lamp', 'largeconduit', 'light',
-    'lightbulbstring', 'meatchub', 'metalcieling', 'metalfloor', 'metalhandrail', 'metalpanel',
-    'metalpillar', 'metalplatform', 'metalpole', 'metalramp', 'metalstair', 'metalsupport',
-    'metaltop', 'mirror', 'monitor', 'oranges', 'overheadcrane', 'painting',
-    'papertowels', 'petfoodtub', 'piano', 'picture', 'pictureframe', 'pillar',
-    'pipe', 'plant', 'plantholder', 'platform', 'post', 'railgatebase',
-    'railing', 'railtrack', 'railtrackend', 'receptiondesk', 'refrigerator', 'road',
-    'robotarm', 'rock', 'rollingcabinet', 'roof', 'rug', 'saucebottle',
-    'screendivider', 'seat', 'sewergrate', 'shampoo', 'shelf', 'shoppingbags',
-    'sidewalk', 'sign', 'sky', 'sodabottle', 'sofa', 'stair',
-    'stairs', 'staticmeshactor', 'storagerack', 'streetlight', 'supportarch', 'supportbeam',
-    'supportcolumn', 'table', 'tireassembly', 'toolbox', 'trashcan', 'tree',
-    'tunnel', 'tv', 'vendingmachine', 'vent', 'ventilationgrill', 'ventpipe',
-    'vine', 'walkway', 'wall', 'wallarch', 'wallarchway', 'walllight',
-    'walls', 'window', 'windowframe', 'woodenbox', 'woodenpallet', 'woodenplank',
-]
+occ_names = ['others', 'bathroompartition', 'binder', 'blinds', 'book', 'bottle',
+             'briefcase', 'building', 'cardboardbox', 'carpet', 'ceiling', 'ceilingvent',
+             'chair', 'clipboard', 'clock', 'coffeecup', 'computerbaseunit', 'computermouse',
+             'computermousepad', 'copier', 'cup', 'cupboard', 'desk', 'donut', 'door',
+             'eraser', 'filecabinet', 'firealarm', 'firesprinkler', 'floor', 'goblet',
+             'handdryer', 'headsculpture', 'jug', 'keyboard', 'lamp', 'laptop', 'light',
+             'marker', 'microphone', 'mirror', 'monitor', 'paperstack', 'paperstand',
+             'papertray', 'pen', 'pencil', 'pencilcontainer', 'phone', 'picture', 'pictureframe',
+             'plant', 'printer', 'rack', 'receptiondesk', 'rollingcabinet', 'securitycamera',
+             'sign', 'sink', 'skysphere', 'smartphone', 'smokedetector', 'soapdispenser', 'sofa',
+             'sticker', 'table', 'tabletpc', 'toilet', 'trashcan', 'tray', 'tv', 'urinal', 'vase',
+             'wall', 'watercooler', 'whiteboardmagnet', 'window', 'writingmat', 'z']
 occ_eval_names = occ_names + ['free']
 
-# Precomputed from semantic_unify_report.json.
-# cls_weights in [1, 30] by inverse-frequency sqrt mapping:
-#   w_i = round(1 + 29 * norm((max_count / count_i) ** 0.5))
-# others(id=0) is manually fixed to 10.
-rare_classes = [
-    13, 26, 50, 65, 76, 140, 134, 112, 56, 39, 32, 5,
-    29, 55, 19, 96, 37, 66, 106, 129, 53, 61, 23, 92,
-]
+# Precomputed from data/Office_sem_class_stats.json (integerized to 1-10) for lazy-parse safety.
+rare_classes = [13, 17, 23, 25, 28, 32, 39, 45, 60, 64, 66, 75, 77, 78]
 cls_weights = [
-    10, 2, 15, 23, 7, 28, 26, 14, 18, 12, 7, 22, 20, 30, 10, 13,
-    17, 14, 26, 27, 1, 3, 5, 26, 7, 18, 29, 16, 9, 28, 2, 9,
-    28, 7, 20, 12, 12, 27, 22, 28, 14, 18, 15, 26, 16, 10, 14, 25,
-    21, 13, 29, 4, 8, 27, 5, 28, 28, 7, 15, 1, 26, 26, 26, 18,
-    21, 29, 27, 25, 4, 3, 21, 20, 4, 20, 24, 14, 29, 7, 11, 12,
-    2, 5, 9, 6, 16, 11, 8, 19, 9, 12, 24, 23, 26, 25, 17, 23,
-    27, 21, 25, 22, 16, 5, 2, 17, 22, 18, 27, 18, 8, 12, 26, 26,
-    28, 9, 13, 14, 23, 7, 6, 24, 22, 12, 23, 5, 16, 25, 5, 7,
-    2, 27, 8, 15, 4, 16, 28, 13, 5, 4, 19, 9, 29, 15, 23, 24,
-    4, 16, 15, 8, 21, 11, 16, 4, 1, 6, 20, 9, 5, 15, 7, 17,
-    23, 26,
+    1, 1, 1, 1, 1, 2, 1, 1, 1, 1,
+    1, 1, 1, 5, 1, 3, 1, 3, 2, 1,
+    2, 1, 1, 5, 1, 10, 1, 1, 3, 1,
+    1, 1, 3, 1, 2, 2, 2, 1, 1, 6,
+    1, 1, 1, 3, 2, 5, 2, 2, 2, 1,
+    1, 1, 1, 2, 1, 1, 2, 2, 1, 1,
+    5, 2, 1, 1, 4, 1, 7, 1, 1, 1,
+    1, 1, 1, 1, 1, 10, 1, 8, 7,
 ]
 
 # If point cloud range is changed, the models should also change their point
@@ -111,7 +85,7 @@ dataset_cfg = dict(
 embed_dims = 256
 num_layers = 6
 num_query = 4800  # Main occupancy query budget.
-num_frames = 9  # 1 current + 7 history sweeps.
+num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
 num_refines = [
@@ -156,7 +130,7 @@ img_encoder = dict(
     repo_root='/root/wjl/OPUS_mmcv2/third_party/map-anything',
     freeze=True,
     num_views=dataset_cfg['num_views'],
-    num_frames=8,
+    num_frames=num_frames,
     chunk_by_frame=True,
     mapanything_model_cfg=mapanything_model_cfg,
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,
@@ -447,7 +421,7 @@ param_scheduler = [
 ]
 
 # load pretrained weights
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=2)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=5)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
@@ -508,7 +482,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=2, max_keep_ckpts=5, save_last=True),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

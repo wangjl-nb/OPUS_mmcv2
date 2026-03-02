@@ -118,6 +118,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         self.pts_voxel_layer = None
         if pts_voxel_layer is not None:
             self.pts_voxel_layer = Voxelization(**pts_voxel_layer)
+        self.drop_lidar_feat = bool(drop_lidar_feat)
         self.data_aug = data_aug
         self.stop_prev_grad = stop_prev_grad
         self.color_aug = GpuPhotoMetricDistortion()
@@ -178,6 +179,13 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
     def _need_img_branch(self):
         return self.use_external_img_encoder or self.with_img_backbone
+
+    def _maybe_drop_lidar_feat(self, pts_feats):
+        if pts_feats is None:
+            return None
+        if not self.drop_lidar_feat:
+            return pts_feats
+        return torch.zeros_like(pts_feats)
 
     @staticmethod
     def _get_level_weights(weight_cfg, num_levels, name):
@@ -582,8 +590,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             points=points,
             mapanything_extra=mapanything_extra) \
             if self._need_img_branch() else None
+        pts_feats = self._extract_pts_feat_for_head(points)
         if pts_feats is not None:
-            pts_feats = self._extract_pts_feat_for_head(points)
             pts_feats = self._maybe_drop_lidar_feat(pts_feats)
         debug_is_finite('img_feats', img_feats)
         debug_is_finite('pts_feats', pts_feats)
