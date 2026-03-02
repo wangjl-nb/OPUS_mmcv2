@@ -129,8 +129,8 @@ img_encoder = dict(
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,
 )
 img_feature_fusion = dict(
-    alpha=[0.5, 0.5, 0.5, 0.5],
-    beta=[0.5, 0.5, 0.5, 0.5],
+    alpha=[0, 0, 0, 0],
+    beta=[1, 1, 1, 1],
     interp_mode='bilinear',
     align_corners=False,
 )
