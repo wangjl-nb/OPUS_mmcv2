@@ -9,7 +9,7 @@ assert point_input_source in ['lidar', 'depth']
 depth_points_cfg = dict(
     type='LoadPointsFromMultiViewDepth',
     # Keep current-frame points exact time=0 for query init with init_pos_lidar='curr'.
-    sample_stride=7,
+    sample_stride=4,
     max_points_total=560000,
     depth_min=0.01,
     depth_max=30.0,
@@ -76,3 +76,13 @@ test_pipeline = [
 train_dataloader = dict(dataset=dict(ann_file=train_ann_file, pipeline=train_pipeline))
 val_dataloader = dict(dataset=dict(ann_file=val_ann_file, pipeline=test_pipeline))
 test_dataloader = dict(dataset=dict(ann_file=test_ann_file, pipeline=test_pipeline))
+
+# Depth pseudo-points have lower early-stage confidence; 0.3 can over-prune all
+# predictions and make val mIoU collapse to 0.0 in first epochs.
+model = dict(
+    test_cfg=dict(
+        pts=dict(
+            score_thr=0.1,
+        ),
+    ),
+)

@@ -185,7 +185,7 @@ model = dict(
     data_aug=dict(
         img_color_aug=True,  # Move some augmentations to GPU
         img_norm_cfg=img_norm_cfg,
-        img_pad_cfg=dict(size_divisor=32)),
+        img_pad_cfg=dict(size_divisor=14)),
     stop_prev_grad=0,
     img_backbone=img_backbone,
     img_neck=img_neck,
@@ -231,7 +231,7 @@ model = dict(
             _scope_='mmdet',
             gamma=2.0,  # Focus on hard classification samples.
             alpha=0.25,  # Class-balance factor in focal loss.
-            loss_weight=2.0),  # Global weight of classification branch.
+            loss_weight=4.0),  # Global weight of classification branch.
         loss_pts=dict(
             type='SmoothL1Loss',
             _scope_='mmdet',
