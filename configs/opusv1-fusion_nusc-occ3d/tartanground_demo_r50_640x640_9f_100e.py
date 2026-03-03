@@ -3,7 +3,23 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_0.1/'
+
+# =========================
+# Core experiment knobs
+# =========================
+# Unified split pkl naming:
+#   train/val/test -> {split}{ann_pkl_suffix}.pkl
+# Example:
+#   ann_pkl_suffix = '_with_depth' -> train_with_depth.pkl / val_with_depth.pkl / test_with_depth.pkl
+ann_pkl_suffix = ''
+train_ann_file = f'{dataset_root}train{ann_pkl_suffix}.pkl'
+val_ann_file = f'{dataset_root}val{ann_pkl_suffix}.pkl'
+test_ann_file = f'{dataset_root}test{ann_pkl_suffix}.pkl'
+
+# Evaluation / training schedule knobs
+eval_score_thr = 0.3
+val_interval = 5
 
 input_modality = dict(
     use_lidar=True,
@@ -49,8 +65,8 @@ cls_weights = [
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
-pc_voxel_size = [0.05, 0.05, 0.05]
-voxel_size = [0.05, 0.05, 0.05]
+pc_voxel_size = [0.1, 0.1, 0.1]
+voxel_size = [0.1, 0.1, 0.1]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
@@ -96,6 +112,14 @@ num_refines = [
                 64,
                 128,
             ]  # Decoder point expansion per layer.
+
+# Query init mix (used in train_cfg.pts.query_init_mix)
+query_init_mix_cfg = dict(
+    enabled=True,
+    lidar_ratio=0.7,  # Ratio of FPS queries from LiDAR points.
+    random_ratio=0.3,  # Ratio of random queries.
+    random_mode='uniform_pc_range',  # Back-fill random points from pc_range.
+)
 
 img_backbone = dict(
     type='ResNet',
@@ -231,7 +255,7 @@ model = dict(
             _scope_='mmdet',
             gamma=2.0,  # Focus on hard classification samples.
             alpha=0.25,  # Class-balance factor in focal loss.
-            loss_weight=4.0),  # Global weight of classification branch.
+            loss_weight=2.0),  # Global weight of classification branch.
         loss_pts=dict(
             type='SmoothL1Loss',
             _scope_='mmdet',
@@ -274,17 +298,12 @@ model = dict(
             ),
 
             # Phase-1: query init mix (LiDAR FPS + random) with strict count conservation.
-            query_init_mix=dict(
-                enabled=True,
-                lidar_ratio=0.7,  # Ratio of FPS queries from LiDAR points.
-                random_ratio=0.3,  # Ratio of random queries.
-                random_mode='uniform_pc_range',  # Back-fill random points from pc_range.
-            ),
+            query_init_mix=query_init_mix_cfg,
         )
     ),
     test_cfg=dict(
         pts=dict(
-            score_thr=0.3,
+            score_thr=eval_score_thr,
             padding=False)
     )
 )
@@ -344,7 +363,7 @@ train_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'train.pkl',
+        ann_file=train_ann_file,
         pipeline=train_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -362,7 +381,7 @@ val_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'val.pkl',
+        ann_file=val_ann_file,
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -380,7 +399,7 @@ test_dataloader = dict(
     dataset=dict(
         type=dataset_type,
         data_root=dataset_root,
-        ann_file=dataset_root + 'test.pkl',
+        ann_file=test_ann_file,
         pipeline=test_pipeline,
         classes=object_names,
         modality=input_modality,
@@ -421,13 +440,13 @@ param_scheduler = [
 ]
 
 # load pretrained weights
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=5)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=val_interval)
 val_cfg = dict(type='ValLoop')
 test_cfg = dict(type='TestLoop')
 
 val_evaluator = dict(
     type='Occ3DMetric',
-    ann_file=dataset_root + 'val.pkl',
+    ann_file=val_ann_file,
     occ_root=occ_root,
     occ_path_template=dataset_cfg['occ_io']['path_template'],
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
@@ -453,7 +472,7 @@ val_evaluator = dict(
 )
 test_evaluator = dict(
     type='Occ3DMetric',
-    ann_file=dataset_root + 'test.pkl',
+    ann_file=test_ann_file,
     occ_root=occ_root,
     occ_path_template=dataset_cfg['occ_io']['path_template'],
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
@@ -482,7 +501,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=5, save_last=True),
+    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=3, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

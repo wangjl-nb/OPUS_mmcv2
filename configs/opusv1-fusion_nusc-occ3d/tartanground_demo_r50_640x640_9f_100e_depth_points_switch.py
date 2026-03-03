@@ -1,10 +1,14 @@
 _base_ = ['./tartanground_demo_r50_640x640_9f_100e.py']
 
+# =========================
+# Core experiment knobs
+# =========================
 # Point input switch:
 # - 'lidar': original LiDAR file + sweeps pipeline
 # - 'depth': multi-view depth -> pseudo-LiDAR points
 point_input_source = 'depth'
 assert point_input_source in ['lidar', 'depth']
+eval_score_thr = 0.3
 
 depth_points_cfg = dict(
     type='LoadPointsFromMultiViewDepth',
@@ -12,7 +16,7 @@ depth_points_cfg = dict(
     sample_stride=4,
     max_points_total=560000,
     depth_min=0.01,
-    depth_max=30.0,
+    depth_max=20.0,
     # Tartanground camera extrinsics are consistent with OpenCV camera frame:
     # x right, y down, z forward. This matches LiDAR frame mapping better.
     coord_convention='opencv',
@@ -25,18 +29,18 @@ depth_points_cfg = dict(
 
 if point_input_source == 'depth':
     point_load_transforms = [depth_points_cfg]
-    train_ann_file = _base_.dataset_root + 'train_with_depth.pkl'
-    val_ann_file = _base_.dataset_root + 'val_with_depth.pkl'
-    test_ann_file = _base_.dataset_root + 'test_with_depth.pkl'
 else:
     point_load_transforms = [
         dict(type='LoadPointsFromFile', coord_type='LIDAR', load_dim=5, use_dim=5),
         dict(type='LoadPointsFromMultiSweeps', sweeps_num=9, use_dim=[0, 1, 2, 3, 4],
              pad_empty_sweeps=True, remove_close=True),
     ]
-    train_ann_file = _base_.dataset_root + 'train.pkl'
-    val_ann_file = _base_.dataset_root + 'val.pkl'
-    test_ann_file = _base_.dataset_root + 'test.pkl'
+
+# Unified split pkl naming by a single suffix variable.
+ann_pkl_suffix = '_with_mapanything_depth' if point_input_source == 'depth' else ''
+train_ann_file = f'{_base_.dataset_root}train{ann_pkl_suffix}.pkl'
+val_ann_file = f'{_base_.dataset_root}val{ann_pkl_suffix}.pkl'
+test_ann_file = f'{_base_.dataset_root}test{ann_pkl_suffix}.pkl'
 
 train_pipeline = [
     dict(type='LoadMultiViewImageFromFiles', to_float32=False, color_type='color', imdecode_backend=_base_.imdecode_backend),
@@ -82,7 +86,7 @@ test_dataloader = dict(dataset=dict(ann_file=test_ann_file, pipeline=test_pipeli
 model = dict(
     test_cfg=dict(
         pts=dict(
-            score_thr=0.1,
+            score_thr=eval_score_thr,
         ),
     ),
 )
