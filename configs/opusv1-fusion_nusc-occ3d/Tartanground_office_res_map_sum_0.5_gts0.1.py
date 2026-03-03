@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_0.1/'
 
 input_modality = dict(
     use_lidar=True,
@@ -122,21 +122,31 @@ img_encoder = dict(
     type='MapAnythingOccEncoder',
     repo_root='/root/wjl/OPUS_mmcv2/third_party/map-anything',
     freeze=True,
+    freeze_via_wrapper=True,
     num_views=dataset_cfg['num_views'],
     num_frames=9,
     chunk_by_frame=True,
     mapanything_model_cfg=mapanything_model_cfg,
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,
-)
-img_feature_fusion = dict(
-    mode='weighted_sum',  # options: ['weighted_sum', 'concat_proj']
-    alpha=[0.5, 0.5, 0.5, 0.5],
-    beta=[0.5, 0.5, 0.5, 0.5],
-    concat_use_act=True,
-    concat_se_reduction=16,
-    concat_se_min_channels=8,
-    interp_mode='bilinear',
-    align_corners=False,
+    anyup_cfg=dict(
+        enabled=True,
+        repo_root='/root/wjl/OPUS_mmcv2/third_party/anyup',
+        variant='anyup_multi_backbone',
+        checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',
+        allow_online_download_if_missing=True,
+        q_chunk_size=256,
+        view_batch_size=dataset_cfg['num_views'],
+        output_in_channels=1024,
+        output_channels=256,
+        upsample_output_divisor=4,
+        freeze=True,
+        pyramid=dict(
+            output_divisors=[4, 8, 16, 32],
+            downsample_mode='area',
+            num_levels=4,
+            align_corners=False,
+        ),
+    ),
 )
 img_norm_cfg = dict(
     mean=[123.675, 116.280, 103.530],
@@ -179,15 +189,13 @@ model = dict(
     type='OPUSV1Fusion',
     data_preprocessor=dict(type='BaseDataPreprocessor'),
     use_grid_mask=False,
-    data_aug=dict(
-        img_color_aug=True,  # Move some augmentations to GPU
-        img_norm_cfg=img_norm_cfg,
-        img_pad_cfg=dict(size_divisor=8)),
+    data_aug=None,
     stop_prev_grad=0,
-    img_backbone=img_backbone,
-    img_neck=img_neck,
+    img_backbone=None,
+    img_neck=None,
     img_encoder=img_encoder,
-    img_feature_fusion=img_feature_fusion,
+    img_feature_fusion=None,
+    use_external_img_encoder=True,
     pts_voxel_layer=pts_voxel_layer,
     pts_voxel_encoder=pts_voxel_encoder,
     pts_middle_encoder=pts_middle_encoder,
@@ -331,7 +339,7 @@ test_pipeline = [
         'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
 ]
 
-batch_size = 16
+batch_size = 32
 
 train_dataloader = dict(
     batch_size=batch_size,
@@ -397,7 +405,6 @@ optim_wrapper = dict(
     type='AmpOptimWrapper',
     optimizer=optimizer,
     paramwise_cfg=dict(custom_keys={
-        'img_backbone': dict(lr_mult=0.1),
         'sampling_offset': dict(lr_mult=0.1),
     }),
     loss_scale=512.0,
@@ -485,7 +492,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=1),
+    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=5),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

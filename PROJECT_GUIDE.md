@@ -324,6 +324,37 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 
 ---
 
+## AnyUp 外部分支模式（关闭 ResNet）
+
+### 数据流（外部分支）
+- 入口：`use_external_img_encoder=True` + `img_backbone=None`，仅走 `img_encoder`。
+- `MapAnything` 先输出低分辨率特征（如 616 输入对应约 `44x44`）。
+- `AnyUp` 将每个 view 特征上采样到该 view 图像分辨率（本项目常用 `616x616`）。
+- 立刻按显式 `output_divisors` 生成 4 层金字塔并释放全分辨率中间特征。
+- 输出格式：`list[4]`，每层为 `Tensor[B,TN,C,H_i,W_i]`。
+
+### 关键配置（`img_encoder.anyup_cfg`）
+- `enabled`: 是否启用 AnyUp 模式。
+- `repo_root`: AnyUp 本地仓库路径（如 `third_party/anyup`）。
+- `variant`: `anyup` / `anyup_multi_backbone`。
+- `checkpoint_path`: AnyUp 权重本地路径。
+- `allow_online_download_if_missing`: 权重缺失时是否在线下载一次后缓存。
+- `q_chunk_size`: AnyUp 推理分块大小，越小越省显存。
+- `freeze`: 冻结 AnyUp 参数（建议 `True`）。
+- `pyramid.output_divisors`: 多层输出尺度（例如 `[4, 8, 16, 32]`）。
+- `pyramid.downsample_mode`: 下采样模式（建议 `area`）。
+- `pyramid.num_levels`: 输出层数（通常 `4`）。
+
+### 运行建议
+- 1024 通道直接上采样显存压力大，建议：
+  - `batch_size=1`
+  - `q_chunk_size` 先用 `64`，OOM 时继续减小。
+- 该模式下建议 `data_aug=None`，由外部分支预处理链负责图像归一化/尺寸对齐。
+- 需要全离线运行时，先执行：
+  - `python scripts/download_anyup_checkpoint.py --variant anyup_multi_backbone`
+
+---
+
 ## 常见踩坑/排查记录
 
 - **mask_camera 全 0 → 空 GT**：

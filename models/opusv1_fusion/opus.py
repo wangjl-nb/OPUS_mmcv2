@@ -84,12 +84,19 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             and self.img_encoder is not None
             and not self.use_external_img_encoder)
         img_encoder_cfg_freeze = False
+        img_encoder_freeze_via_wrapper = False
         if isinstance(img_encoder, dict):
             img_encoder_cfg_freeze = bool(img_encoder.get('freeze', False))
+            # Let the external wrapper freeze only heavy backbones internally,
+            # while keeping local adapters/projections trainable.
+            img_encoder_freeze_via_wrapper = bool(
+                img_encoder.get('freeze_via_wrapper', False))
+        fusion_cfg_freeze_img_encoder = bool(
+            self.img_feature_fusion_cfg is not None
+            and self.img_feature_fusion_cfg.get('freeze_img_encoder', True))
         self._freeze_img_encoder = bool(
-            img_encoder_cfg_freeze or
-            (self.img_feature_fusion_cfg is not None
-             and self.img_feature_fusion_cfg.get('freeze_img_encoder', True)))
+            (img_encoder_cfg_freeze and not img_encoder_freeze_via_wrapper) or
+            (fusion_cfg_freeze_img_encoder and not img_encoder_freeze_via_wrapper))
 
         self.img_fusion_proj = None
         self.img_fusion_concat_proj = None
