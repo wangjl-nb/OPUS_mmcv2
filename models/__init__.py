@@ -1,6 +1,7 @@
 from .backbones import __all__
 from .bbox import __all__
 from .lidar_encoder import __all__
+from .lidar_encoder import TPVLiteEncoder
 from .neck import __all__
 
 from .opusv1.opus import OPUSV1

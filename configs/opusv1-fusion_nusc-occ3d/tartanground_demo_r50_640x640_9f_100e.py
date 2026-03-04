@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_0.1/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
 
 # =========================
 # Core experiment knobs
@@ -65,8 +65,8 @@ cls_weights = [
 # If point cloud range is changed, the models should also change their point
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]
-pc_voxel_size = [0.1, 0.1, 0.1]
-voxel_size = [0.1, 0.1, 0.1]
+pc_voxel_size = [0.05, 0.05, 0.05]
+voxel_size = [0.05, 0.05, 0.05]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],

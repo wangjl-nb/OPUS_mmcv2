@@ -211,6 +211,7 @@ class OPUSV1FusionHead(BaseModule):
     def forward(self,
                 mlvl_feats=None,
                 pts_feats=None,
+                tpv_feats=None,
                 points=None,
                 img_metas=None):
         init_points, query_feat = self.get_init_position(points, mlvl_feats,
@@ -221,6 +222,7 @@ class OPUSV1FusionHead(BaseModule):
             mlvl_feats,
             pts_feats,
             img_metas=img_metas,
+            tpv_feats=tpv_feats,
         )
 
         return dict(init_points=init_points,

@@ -7,7 +7,7 @@ from mmcv.cnn import Scale
 from mmcv.cnn.bricks.transformer import MultiheadAttention, FFN
 from mmcv.ops import knn
 from mmdet3d.registry import MODELS
-from .opus_sampling import sampling_4d, sampling_pts_feats
+from .opus_sampling import sampling_4d, sampling_pts_feats, sampling_tpv_feats
 from ..bbox.utils import decode_bbox, decode_points, encode_points
 from ..utils import inverse_sigmoid, DUMP, debug_is_finite
 from ..checkpoint import checkpoint as cp
@@ -36,6 +36,8 @@ class OPUSV1FusionTransformer(BaseModule):
                  num_refines=[1, 2, 4, 8, 16, 32],
                  scales=[1.0],
                  use_pts_sampling=True,
+                 use_tpv_sampling=False,
+                 tpv_fusion_mode='query_attn',
                  query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
@@ -51,15 +53,17 @@ class OPUSV1FusionTransformer(BaseModule):
             embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
             num_classes, num_refines, num_groups, scales,
             use_pts_sampling=use_pts_sampling,
+            use_tpv_sampling=use_tpv_sampling,
+            tpv_fusion_mode=tpv_fusion_mode,
             query_allocator=query_allocator, pc_range=pc_range)
 
     @torch.no_grad()
     def init_weights(self):
         self.decoder.init_weights()
 
-    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=None):
         cls_scores, refine_pts = self.decoder(
-            query_points, query_feat, mlvl_feats, pts_feats, img_metas)
+            query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=tpv_feats)
 
         cls_scores = [torch.nan_to_num(score) for score in cls_scores]
         refine_pts = [torch.nan_to_num(pts) for pts in refine_pts]
@@ -80,6 +84,8 @@ class OPUSTransformerDecoder(BaseModule):
                  num_groups=4,
                  scales=[1.0],
                  use_pts_sampling=True,
+                 use_tpv_sampling=False,
+                 tpv_fusion_mode='query_attn',
                  query_allocator=None,
                  pc_range=[],
                  init_cfg=None):
@@ -90,6 +96,9 @@ class OPUSTransformerDecoder(BaseModule):
         self.num_views = num_views
         self.num_groups = num_groups
         self.use_pts_sampling = bool(use_pts_sampling)
+        self.use_tpv_sampling = bool(use_tpv_sampling)
+        if self.use_pts_sampling and self.use_tpv_sampling:
+            raise ValueError('use_pts_sampling and use_tpv_sampling cannot both be True')
         self.query_allocator = query_allocator or {}
 
         if len(scales) == 1:
@@ -108,7 +117,9 @@ class OPUSTransformerDecoder(BaseModule):
                     embed_dims, num_frames, num_views, num_points, num_levels, num_classes, 
                     num_groups, num_refines[i], last_refines[i], layer_idx=i, 
                     scale=scales[i], pc_range=pc_range,
-                    use_pts_sampling=self.use_pts_sampling)
+                    use_pts_sampling=self.use_pts_sampling,
+                    use_tpv_sampling=self.use_tpv_sampling,
+                    tpv_fusion_mode=tpv_fusion_mode)
             )
 
     @torch.no_grad()
@@ -197,7 +208,7 @@ class OPUSTransformerDecoder(BaseModule):
 
         return new_query_points, new_query_feat
 
-    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=None):
         cls_scores, refine_pts = [], []
 
         ego2img = np.asarray([m['ego2img'] for m in img_metas]).astype(np.float32)
@@ -240,14 +251,45 @@ class OPUSTransformerDecoder(BaseModule):
             # group pts features in advance for sampling
             B, GC, H, W = pts_feats.shape
             G, C = self.num_groups, GC // self.num_groups
+            if GC % G != 0:
+                raise ValueError(
+                    f'pts_feats channel={GC} is not divisible by num_groups={G}')
             pts_feats = pts_feats.reshape(B, G, C, H, W).reshape(B * G, C, H, W)
+        elif self.use_tpv_sampling:
+            if tpv_feats is None:
+                raise ValueError('tpv_feats must be provided when use_tpv_sampling=True')
+            if not isinstance(tpv_feats, dict):
+                raise TypeError(f'tpv_feats must be dict, got {type(tpv_feats)}')
+            grouped_tpv = {}
+            expected_batch_size = None
+            for plane_key in ['xy', 'xz', 'yz']:
+                if plane_key not in tpv_feats:
+                    raise KeyError(f'tpv_feats missing key "{plane_key}"')
+                feat = tpv_feats[plane_key]
+                if not isinstance(feat, torch.Tensor) or feat.dim() != 4:
+                    raise ValueError(
+                        f'tpv_feats["{plane_key}"] must be Tensor[B, GC, H, W], '
+                        f'got {type(feat)} shape={getattr(feat, "shape", None)}')
+                B, GC, H, W = feat.shape
+                if expected_batch_size is None:
+                    expected_batch_size = B
+                elif B != expected_batch_size:
+                    raise ValueError(
+                        f'tpv_feats batch mismatch: expected {expected_batch_size}, got {B} for "{plane_key}"')
+                G, C = self.num_groups, GC // self.num_groups
+                if GC % G != 0:
+                    raise ValueError(
+                        f'tpv_feats["{plane_key}"] channel={GC} is not divisible by num_groups={G}')
+                grouped_tpv[plane_key] = feat.reshape(B, G, C, H, W).reshape(B * G, C, H, W)
+            tpv_feats = grouped_tpv
 
         for i, decoder_layer in enumerate(self.decoder_layers):
             DUMP.stage_count = i
 
             query_points = query_points.detach()
             query_feat, cls_score, query_points = decoder_layer(
-                query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas)
+                query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
+                img_metas, tpv_feats=tpv_feats)
 
             debug_is_finite(f'decoder_layer[{i}].cls_score', cls_score)
             debug_is_finite(f'decoder_layer[{i}].query_points', query_points)
@@ -279,6 +321,8 @@ class OPUSTransformerDecoderLayer(BaseModule):
                  scale=1.0,
                  pc_range=[],
                  use_pts_sampling=True,
+                 use_tpv_sampling=False,
+                 tpv_fusion_mode='query_attn',
                  init_cfg=None):
         super().__init__(init_cfg)
 
@@ -291,6 +335,7 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.layer_idx = layer_idx
         self.scale = scale
         self.use_pts_sampling = bool(use_pts_sampling)
+        self.use_tpv_sampling = bool(use_tpv_sampling)
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3 * self.last_refines, self.embed_dims), 
@@ -306,9 +351,12 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.sampling = OPUSSampling(embed_dims, num_frames=num_frames, num_views=num_views,
                                      num_groups=num_groups, num_points=num_points, 
                                      num_levels=num_levels, pc_range=pc_range,
-                                     use_pts_sampling=self.use_pts_sampling)
+                                     use_pts_sampling=self.use_pts_sampling,
+                                     use_tpv_sampling=self.use_tpv_sampling,
+                                     tpv_fusion_mode=tpv_fusion_mode)
         
-        mixing_points = num_points * (num_frames + (1 if self.use_pts_sampling else 0))
+        mixing_points = num_points * (
+            num_frames + (1 if (self.use_pts_sampling or self.use_tpv_sampling) else 0))
         self.img_pts_mixing=AdaptiveMixing(
             in_dim=embed_dims, in_points=mixing_points, n_groups=num_groups)
 
@@ -353,7 +401,8 @@ class OPUSTransformerDecoderLayer(BaseModule):
         new_points = points_proposal + points_delta
         return encode_points(new_points, self.pc_range)
 
-    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
+                img_metas, tpv_feats=None):
         """
         query_points: [B, Q, 3] [x, y, z]
         pts_feats:[B,C,dy,dx]
@@ -362,7 +411,8 @@ class OPUSTransformerDecoderLayer(BaseModule):
         query_feat = query_feat + query_pos
 
         sampled_img_feat, sampled_pts_feat = self.sampling(
-            query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas)
+            query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
+            img_metas, tpv_feats=tpv_feats)
         if sampled_pts_feat is None:
             sampled_feat = sampled_img_feat
         else:
@@ -451,6 +501,8 @@ class OPUSSampling(BaseModule):
                  num_levels=4,
                  pc_range=[],
                  use_pts_sampling=True,
+                 use_tpv_sampling=False,
+                 tpv_fusion_mode='query_attn',
                  init_cfg=None):
         super().__init__(init_cfg)
 
@@ -461,16 +513,27 @@ class OPUSSampling(BaseModule):
         self.num_levels = num_levels
         self.pc_range = pc_range
         self.use_pts_sampling = bool(use_pts_sampling)
+        self.use_tpv_sampling = bool(use_tpv_sampling)
+        if self.use_pts_sampling and self.use_tpv_sampling:
+            raise ValueError('use_pts_sampling and use_tpv_sampling cannot both be True')
+        self.tpv_fusion_mode = tpv_fusion_mode
 
         self.sampling_offset = nn.Linear(embed_dims, num_groups * num_points * 3)
         self.scale_weights = nn.Linear(embed_dims, num_groups * num_points * num_levels)
+        self.tpv_plane_weights = None
+        if self.use_tpv_sampling:
+            if self.tpv_fusion_mode != 'query_attn':
+                raise ValueError(
+                    f'Unsupported tpv_fusion_mode={self.tpv_fusion_mode}, expected "query_attn"')
+            self.tpv_plane_weights = nn.Linear(embed_dims, num_groups * num_points * 3)
 
     def init_weights(self):
         bias = self.sampling_offset.bias.data.view(self.num_groups * self.num_points, 3)
         nn.init.zeros_(self.sampling_offset.weight)
         nn.init.uniform_(bias[:, 0:3], -0.5, 0.5)
 
-    def inner_forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas):
+    def inner_forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
+                      img_metas, tpv_feats=None):
         '''
         query_points: [B, Q, 6]
         query_feat: [B, Q, C]
@@ -525,16 +588,30 @@ class OPUSSampling(BaseModule):
                 occ2lidar,
                 self.pc_range
             )  # [B, Q, G, P, C]
+        elif self.use_tpv_sampling:
+            if tpv_feats is None:
+                raise ValueError('tpv_feats is None while use_tpv_sampling=True')
+            plane_weights = None
+            if self.tpv_fusion_mode == 'query_attn':
+                plane_weights = self.tpv_plane_weights(query_feat).view(
+                    B, Q, self.num_groups, self.num_points, 3)
+            sampled_pts_feats = sampling_tpv_feats(
+                pts_sampling_points,
+                tpv_feats,
+                self.pc_range,
+                plane_weights=plane_weights,
+            )  # [B, Q, G, P, C]
 
         return sampled_img_feats, sampled_pts_feats
 
-    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar, img_metas):
+    def forward(self, query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
+                img_metas, tpv_feats=None):
         if self.training and query_feat.requires_grad:
             return cp(self.inner_forward, query_points, query_feat, mlvl_feats, pts_feats,
-                      occ2img, occ2lidar, img_metas, use_reentrant=False)
+                      occ2img, occ2lidar, img_metas, tpv_feats, use_reentrant=False)
         else:
             return self.inner_forward(query_points, query_feat, mlvl_feats, pts_feats,
-                                      occ2img, occ2lidar, img_metas)
+                                      occ2img, occ2lidar, img_metas, tpv_feats=tpv_feats)
 
 
 class AdaptiveMixing(nn.Module):

@@ -173,3 +173,77 @@ def sampling_pts_feats(sample_points, pts_feats, occ2lidar, pc_range):
     feat = feat.permute(0, 3, 1, 4, 2)  # [B, Q, G, P, C]
 
     return feat
+
+
+def sampling_tpv_feats(sample_points, tpv_feats, pc_range, plane_weights=None):
+    """Sample TPV features (XY/XZ/YZ planes) at query-centered 3D points.
+
+    Args:
+        sample_points (Tensor): [B, Q, G, P, 3] in pc_range coordinate space.
+        tpv_feats (dict[str, Tensor]): {
+            'xy': [B*G, C, Ny, Nx],
+            'xz': [B*G, C, Nz, Nx],
+            'yz': [B*G, C, Nz, Ny],
+        }
+        pc_range (list[float] or Tensor): [x_min, y_min, z_min, x_max, y_max, z_max].
+        plane_weights (Tensor | None): [B, Q, G, P, 3], soft weights for xy/xz/yz.
+
+    Returns:
+        Tensor: [B, Q, G, P, C]
+    """
+    stage = getattr(DUMP, 'stage_count', 'na')
+    debug_is_finite(f'sampling_tpv_feats.stage{stage}.sample_points', sample_points)
+
+    required = ['xy', 'xz', 'yz']
+    if not isinstance(tpv_feats, dict):
+        raise TypeError(f'tpv_feats must be dict, got {type(tpv_feats)}')
+    for key in required:
+        if key not in tpv_feats:
+            raise KeyError(f'tpv_feats missing key "{key}"')
+        if not isinstance(tpv_feats[key], torch.Tensor) or tpv_feats[key].dim() != 4:
+            raise ValueError(
+                f'tpv_feats["{key}"] must be Tensor[B*G, C, H, W], '
+                f'got {type(tpv_feats[key])} shape={getattr(tpv_feats[key], "shape", None)}')
+
+    xy_feat = tpv_feats['xy']
+    xz_feat = tpv_feats['xz']
+    yz_feat = tpv_feats['yz']
+    C = xy_feat.shape[1]
+
+    B, Q, G, P, _ = sample_points.shape
+    sample_points = sample_points.permute(0, 2, 1, 3, 4).reshape(B * G, Q, P, 3)  # [BG, Q, P, 3]
+    norm_sample_points = encode_points(sample_points, pc_range)  # [BG, Q, P, 3]
+    norm_sample_points = torch.nan_to_num(norm_sample_points, nan=0.0, posinf=1.0, neginf=0.0)
+    norm_sample_points = norm_sample_points.clamp(0.0, 1.0)
+
+    grid_xy = torch.stack([norm_sample_points[..., 0], norm_sample_points[..., 1]], dim=-1)
+    grid_xz = torch.stack([norm_sample_points[..., 0], norm_sample_points[..., 2]], dim=-1)
+    grid_yz = torch.stack([norm_sample_points[..., 1], norm_sample_points[..., 2]], dim=-1)
+    grid_xy = (grid_xy * 2.0 - 1.0).to(dtype=xy_feat.dtype)
+    grid_xz = (grid_xz * 2.0 - 1.0).to(dtype=xz_feat.dtype)
+    grid_yz = (grid_yz * 2.0 - 1.0).to(dtype=yz_feat.dtype)
+
+    sampled_xy = F.grid_sample(
+        xy_feat, grid_xy, padding_mode='zeros', align_corners=True)  # [BG, C, Q, P]
+    sampled_xz = F.grid_sample(
+        xz_feat, grid_xz, padding_mode='zeros', align_corners=True)  # [BG, C, Q, P]
+    sampled_yz = F.grid_sample(
+        yz_feat, grid_yz, padding_mode='zeros', align_corners=True)  # [BG, C, Q, P]
+    debug_is_finite(f'sampling_tpv_feats.stage{stage}.sampled_xy', sampled_xy)
+    debug_is_finite(f'sampling_tpv_feats.stage{stage}.sampled_xz', sampled_xz)
+    debug_is_finite(f'sampling_tpv_feats.stage{stage}.sampled_yz', sampled_yz)
+
+    sampled_xy = sampled_xy.reshape(B, G, C, Q, P).permute(0, 3, 1, 4, 2)  # [B, Q, G, P, C]
+    sampled_xz = sampled_xz.reshape(B, G, C, Q, P).permute(0, 3, 1, 4, 2)
+    sampled_yz = sampled_yz.reshape(B, G, C, Q, P).permute(0, 3, 1, 4, 2)
+
+    if plane_weights is None:
+        return (sampled_xy + sampled_xz + sampled_yz) / 3.0
+
+    if plane_weights.shape != (B, Q, G, P, 3):
+        raise ValueError(
+            f'plane_weights shape mismatch: expected {(B, Q, G, P, 3)}, '
+            f'got {tuple(plane_weights.shape)}')
+    weights = torch.softmax(plane_weights, dim=-1).to(sampled_xy.dtype)[..., None]
+    sampled = torch.stack([sampled_xy, sampled_xz, sampled_yz], dim=-2)  # [B, Q, G, P, 3, C]
+    return (sampled * weights).sum(dim=-2)

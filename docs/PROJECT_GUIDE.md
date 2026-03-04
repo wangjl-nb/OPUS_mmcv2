@@ -7,9 +7,9 @@
 
 ## 文档导航
 - 快速定位：Repo layout / 需求到代码入口映射 / 1 分钟排查模板
-- 模型主链：OPUSV1 / OPUSV1Fusion forward、query 初始化、4D sampling
+- 模型主链：OPUSV1 / OPUSV1Fusion forward、query 初始化、4D/TPV sampling
 - 训练核心：GT 构造、KNN 配对、loss 字段释义
-- 专项主题：Depth points 切换、MapAnything 融合、Fusion 消融
+- 专项主题：Depth points 切换、MapAnything 融合、Fusion 消融、TPV-Lite
 - 收尾检查：常见踩坑与 consistency checklist
 
 ## 可用的python环境
@@ -46,6 +46,24 @@ conda activate opus-mmcv2
 - Config switch example:
   - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_depth_points_switch.py`
   - `point_input_source = 'depth'` or `'lidar'`
+
+## TPV-Lite feature branch (Fusion)
+- Purpose:
+  - Keep depth->pseudo-points input path, but replace 2D BEV point-feature sampling with tri-plane TPV sampling (`XY/XZ/YZ`) so Z-axis structure is retained.
+  - Reuse sparse 3D backbone features from `SparseEncoder` and convert to TPV after a lightweight 3D FPN-style upsample + skip residual fusion.
+  - In TPV-only mode (`enable_pts_feature_branch=False`), freeze `pts_middle_encoder.conv_out` to avoid DDP unused-parameter reduction errors.
+- Main code:
+  - Encoder: `models/lidar_encoder/tpv_lite_encoder.py` (`TPVLiteEncoder`)
+  - Sampling: `models/opusv1_fusion/opus_sampling.py` (`sampling_tpv_feats`)
+  - Routing: `models/opusv1_fusion/opus.py` / `models/opusv1_fusion/opus_head.py` / `models/opusv1_fusion/opus_transformer.py`
+- Config entry:
+  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_tpv_lite_depth.py`
+  - Key switches:
+    - `model.enable_tpv_feature_branch=True`
+    - `model.enable_pts_feature_branch=False`
+    - `model.pts_middle_encoder.return_middle_feats=True`
+    - `transformer.use_tpv_sampling=True`
+    - `transformer.use_pts_sampling=False`
 
 ## Model overview
 OPUS is an occupancy prediction framework using query points + transformer-style refinement. There are two main variants:

@@ -38,6 +38,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                  img_feature_fusion=None,
                  use_external_img_encoder=False,
                  enable_pts_feature_branch=True,
+                 enable_tpv_feature_branch=False,
+                 tpv_encoder=None,
                  external_img_cache=False,
                  pts_backbone=None,
                  img_neck=None,
@@ -75,8 +77,14 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         self.use_external_img_encoder = bool(use_external_img_encoder)
         self.enable_pts_feature_branch = bool(enable_pts_feature_branch)
+        self.enable_tpv_feature_branch = bool(enable_tpv_feature_branch)
         self.external_img_cache = bool(external_img_cache)
         self.img_encoder = MODELS.build(img_encoder) if img_encoder is not None else None
+        self.tpv_encoder = None
+        if self.enable_tpv_feature_branch:
+            if tpv_encoder is None:
+                raise ValueError('tpv_encoder must be provided when enable_tpv_feature_branch=True')
+            self.tpv_encoder = MODELS.build(tpv_encoder)
         if self.use_external_img_encoder and self.img_encoder is None:
             raise ValueError('img_encoder must be provided when use_external_img_encoder=True')
         self.img_feature_fusion_cfg = copy.deepcopy(img_feature_fusion) if img_feature_fusion else None
@@ -142,12 +150,32 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         self.pts_feat_dim=pts_feat_dim
         if not self.enable_pts_feature_branch:
-            # These modules are intentionally disabled in this training setup.
-            # Mark them frozen to avoid DDP unused-parameter reduction errors.
-            self._freeze_module(self.pts_voxel_encoder)
-            self._freeze_module(self.pts_middle_encoder)
+            # In TPV mode, voxel+middle encoders are still used.
+            if not self.enable_tpv_feature_branch:
+                self._freeze_module(self.pts_voxel_encoder)
+                self._freeze_module(self.pts_middle_encoder)
+            else:
+                # TPV branch uses middle encoder's encode_features, not its conv_out path.
+                self._freeze_module(getattr(self.pts_middle_encoder, 'conv_out', None))
             self._freeze_module(self.pts_backbone)
             self._freeze_module(self.pts_neck)
+
+        if self.enable_tpv_feature_branch:
+            if self.pts_voxel_layer is None or self.pts_voxel_encoder is None or self.pts_middle_encoder is None:
+                raise ValueError(
+                    'TPV branch requires pts_voxel_layer, pts_voxel_encoder, and pts_middle_encoder.')
+            if not bool(getattr(self.pts_middle_encoder, 'return_middle_feats', False)):
+                raise ValueError(
+                    'TPV branch requires pts_middle_encoder.return_middle_feats=True.')
+
+        transformer = getattr(self.pts_bbox_head, 'transformer', None)
+        if transformer is not None:
+            if bool(getattr(transformer, 'use_tpv_sampling', False)) and (not self.enable_tpv_feature_branch):
+                raise ValueError(
+                    'transformer.use_tpv_sampling=True requires enable_tpv_feature_branch=True')
+            if bool(getattr(transformer, 'use_pts_sampling', False)) and (not self.enable_pts_feature_branch):
+                raise ValueError(
+                    'transformer.use_pts_sampling=True requires enable_pts_feature_branch=True')
 
     @staticmethod
     def _freeze_module(module):
@@ -363,6 +391,49 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             return None
         pts_feats = self.extract_pts_feat(points)
         return self.final_conv(pts_feats[0])
+
+    def _extract_tpv_feat_for_head(self, points):
+        if not self.enable_tpv_feature_branch:
+            return None
+        if self.tpv_encoder is None:
+            raise RuntimeError('TPV branch is enabled but tpv_encoder is not initialized')
+        if points is None:
+            raise ValueError('points must be provided when enable_tpv_feature_branch=True')
+        sparse_feats = self._extract_sparse_3d_feat_for_tpv(points)
+        return self.tpv_encoder(sparse_feats)
+
+    def _extract_sparse_3d_feat_for_tpv(self, points):
+        voxels, num_points, coors = self.voxelize(points)
+        voxel_features = self.pts_voxel_encoder(voxels, num_points, coors)
+        batch_size = int(coors[-1, 0].item()) + 1
+        middle_out = self.pts_middle_encoder(voxel_features, coors, batch_size)
+
+        if (not isinstance(middle_out, (tuple, list))) or len(middle_out) != 2:
+            raise RuntimeError(
+                'pts_middle_encoder must return (spatial_features, encode_features) '
+                'for TPV branch. Please set return_middle_feats=True.')
+        _, encode_features = middle_out
+        if not isinstance(encode_features, (list, tuple)) or len(encode_features) == 0:
+            raise RuntimeError('Invalid encode_features from pts_middle_encoder.')
+
+        high_sparse = encode_features[-1]
+        if not hasattr(high_sparse, 'dense'):
+            raise TypeError('encode_features items must be sparse tensors supporting dense().')
+        high_dense = high_sparse.dense()
+
+        # Pick the nearest higher-resolution stage as skip for 3D FPN fusion.
+        skip_sparse = None
+        high_shape = tuple(int(v) for v in high_dense.shape[-3:])
+        for feat in reversed(encode_features[:-1]):
+            feat_shape = getattr(feat, 'spatial_shape', None)
+            if feat_shape is None:
+                continue
+            feat_shape = tuple(int(v) for v in feat_shape)
+            if any(a > b for a, b in zip(feat_shape, high_shape)):
+                skip_sparse = feat
+                break
+        skip_dense = skip_sparse.dense() if skip_sparse is not None else None
+        return dict(high=high_dense, skip=skip_dense)
 
     @torch.no_grad()
     def voxelize(self, points):
@@ -591,13 +662,15 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             mapanything_extra=mapanything_extra) \
             if self._need_img_branch() else None
         pts_feats = self._extract_pts_feat_for_head(points)
+        tpv_feats = self._extract_tpv_feat_for_head(points)
         if pts_feats is not None:
             pts_feats = self._maybe_drop_lidar_feat(pts_feats)
         debug_is_finite('img_feats', img_feats)
         debug_is_finite('pts_feats', pts_feats)
+        debug_is_finite('tpv_feats', tpv_feats)
 
         # forward occ head
-        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
+        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats, tpv_feats=tpv_feats,
                                   img_metas=img_metas, points=points)
         if mask_camera is None:
             mask_camera = torch.ones_like(voxel_semantics)
@@ -725,8 +798,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             mapanything_extra=mapanything_extra) \
             if self._need_img_branch() else None
         pts_feats = self._extract_pts_feat_for_head(points)
+        tpv_feats = self._extract_tpv_feat_for_head(points)
 
-        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
+        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats, tpv_feats=tpv_feats,
                                   img_metas=img_metas, points=points)
         return self.pts_bbox_head.get_occ(outs, img_metas[0], rescale=rescale)
 
@@ -815,10 +889,11 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         # extract points features
         pts_feats = self._extract_pts_feat_for_head(points)
+        tpv_feats = self._extract_tpv_feat_for_head(points)
         if pts_feats is not None:
                 pts_feats = self._maybe_drop_lidar_feat(pts_feats)
 
         # run occupancy predictor
-        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats,
+        outs = self.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats, tpv_feats=tpv_feats,
                                   img_metas=img_metas, points=points)
         return self.pts_bbox_head.get_occ(outs, img_metas[0], rescale=rescale)

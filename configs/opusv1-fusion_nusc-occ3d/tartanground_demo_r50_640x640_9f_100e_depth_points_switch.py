@@ -16,7 +16,7 @@ depth_points_cfg = dict(
     sample_stride=4,
     max_points_total=560000,
     depth_min=0.01,
-    depth_max=20.0,
+    depth_max=30.0,
     # Tartanground camera extrinsics are consistent with OpenCV camera frame:
     # x right, y down, z forward. This matches LiDAR frame mapping better.
     coord_convention='opencv',
@@ -37,7 +37,7 @@ else:
     ]
 
 # Unified split pkl naming by a single suffix variable.
-ann_pkl_suffix = '_with_mapanything_depth' if point_input_source == 'depth' else ''
+ann_pkl_suffix = '_with_mapanything_depth' if point_input_source == 'depth' else '' # depth gt
 train_ann_file = f'{_base_.dataset_root}train{ann_pkl_suffix}.pkl'
 val_ann_file = f'{_base_.dataset_root}val{ann_pkl_suffix}.pkl'
 test_ann_file = f'{_base_.dataset_root}test{ann_pkl_suffix}.pkl'
