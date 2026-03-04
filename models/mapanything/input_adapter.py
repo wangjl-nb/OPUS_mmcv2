@@ -1,6 +1,7 @@
 import copy
 import warnings
 
+import numpy as np
 import torch
 
 
@@ -151,7 +152,25 @@ class OPUSToMapAnythingInputAdapter:
             return value[idx]
         return value
 
-    def _merge_view_extra(self, base_view, view_extra):
+    @staticmethod
+    def _is_batched_sequence(value, batch_size):
+        return isinstance(value, (list, tuple)) and len(value) == batch_size and batch_size > 0
+
+    @staticmethod
+    def _select_batched_value(value, batch_idx, batch_size):
+        if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+            return value[batch_idx]
+        if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+            return np.array(value[batch_idx], copy=True)
+        if OPUSToMapAnythingInputAdapter._is_batched_sequence(value, batch_size):
+            first = value[0]
+            if isinstance(first, (dict, list, tuple, np.ndarray, torch.Tensor)):
+                return copy.deepcopy(value[batch_idx])
+        if isinstance(value, (list, tuple)) and len(value) == 1:
+            return copy.deepcopy(value[0])
+        return value
+
+    def _merge_view_extra(self, base_view, view_extra, batch_idx, batch_size):
         if view_extra is None:
             return base_view
         if not isinstance(view_extra, dict):
@@ -160,7 +179,14 @@ class OPUSToMapAnythingInputAdapter:
         if 'img' in view_extra:
             raise KeyError('mapanything_extra.views[*] must not override the "img" field')
         merged = dict(base_view)
-        merged.update(view_extra)
+        normalized_extra = {}
+        for key, value in view_extra.items():
+            if key == 'is_metric_scale' and self._is_batched_sequence(value, batch_size):
+                normalized_extra[key] = copy.deepcopy(value[batch_idx])
+                continue
+            normalized_extra[key] = self._select_batched_value(
+                value, batch_idx=batch_idx, batch_size=batch_size)
+        merged.update(normalized_extra)
         return merged
 
     def __call__(self, img, points, img_metas, mapanything_extra=None):
@@ -202,7 +228,11 @@ class OPUSToMapAnythingInputAdapter:
                 if self.lidar_injection in ('shared', 'both'):
                     view['shared'] = shared_extra
 
-                view = self._merge_view_extra(view, views_extra[view_idx])
+                view = self._merge_view_extra(
+                    view,
+                    views_extra[view_idx],
+                    batch_idx=batch_idx,
+                    batch_size=batch_size)
                 sample_views.append(view)
 
             batch_views.append(sample_views)

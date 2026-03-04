@@ -93,14 +93,25 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             and self.img_encoder is not None
             and not self.use_external_img_encoder)
         img_encoder_cfg_freeze = False
+        img_encoder_freeze_via_wrapper = False
         if isinstance(img_encoder, dict):
             img_encoder_cfg_freeze = bool(img_encoder.get('freeze', False))
+            # Let the wrapper selectively freeze heavy submodules while keeping
+            # lightweight adaptors/projections trainable.
+            img_encoder_freeze_via_wrapper = bool(
+                img_encoder.get('freeze_via_wrapper', False))
+        fusion_cfg_freeze_img_encoder = bool(
+            self.img_feature_fusion_cfg is not None
+            and self.img_feature_fusion_cfg.get('freeze_img_encoder', True))
         self._freeze_img_encoder = bool(
-            img_encoder_cfg_freeze or
-            (self.img_feature_fusion_cfg is not None
-             and self.img_feature_fusion_cfg.get('freeze_img_encoder', True)))
+            (img_encoder_cfg_freeze and not img_encoder_freeze_via_wrapper) or
+            (fusion_cfg_freeze_img_encoder and not img_encoder_freeze_via_wrapper))
 
         self.img_fusion_proj = None
+        self.img_fusion_concat_proj = None
+        self.img_fusion_concat_act = None
+        self.img_fusion_concat_se = None
+        self.img_fusion_mode = 'weighted_sum'
         self.img_fusion_interp_mode = 'bilinear'
         self.img_fusion_align_corners = False
         if self.use_img_feature_fusion:
@@ -117,6 +128,43 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 stride=1,
                 padding=0,
                 bias=True)
+            self.img_fusion_mode = str(
+                self.img_feature_fusion_cfg.get('mode', 'weighted_sum')).lower()
+            valid_fusion_modes = ('weighted_sum', 'concat_proj')
+            if self.img_fusion_mode not in valid_fusion_modes:
+                raise ValueError(
+                    f'img_feature_fusion.mode must be one of {valid_fusion_modes}, '
+                    f'got {self.img_fusion_mode}')
+            if self.img_fusion_mode == 'concat_proj':
+                self.img_fusion_concat_proj = nn.Conv2d(
+                    fusion_out_channels * 2,
+                    fusion_out_channels,
+                    kernel_size=1,
+                    stride=1,
+                    padding=0,
+                    bias=True)
+                if bool(self.img_feature_fusion_cfg.get('concat_use_act', True)):
+                    self.img_fusion_concat_act = nn.ReLU(inplace=True)
+                concat_se_reduction = int(
+                    self.img_feature_fusion_cfg.get('concat_se_reduction', 16))
+                concat_se_min_channels = int(
+                    self.img_feature_fusion_cfg.get('concat_se_min_channels', 8))
+                if concat_se_reduction <= 0:
+                    raise ValueError(
+                        f'concat_se_reduction must be positive, got {concat_se_reduction}')
+                if concat_se_min_channels <= 0:
+                    raise ValueError(
+                        f'concat_se_min_channels must be positive, got {concat_se_min_channels}')
+                concat_se_hidden = max(
+                    fusion_out_channels // concat_se_reduction,
+                    concat_se_min_channels)
+                self.img_fusion_concat_se = nn.Sequential(
+                    nn.AdaptiveAvgPool2d(1),
+                    nn.Conv2d(fusion_out_channels, concat_se_hidden, kernel_size=1, bias=True),
+                    nn.ReLU(inplace=True),
+                    nn.Conv2d(concat_se_hidden, fusion_out_channels, kernel_size=1, bias=True),
+                    nn.Sigmoid(),
+                )
             self.img_fusion_interp_mode = self.img_feature_fusion_cfg.get('interp_mode', 'bilinear')
             self.img_fusion_align_corners = bool(
                 self.img_feature_fusion_cfg.get('align_corners', False))
@@ -382,7 +430,27 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 target_hw=(H_fpn, W_fpn))
             ext_lvl = ext_lvl_2d.view(B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn)
             ext_lvl = ext_lvl.to(dtype=fpn_feat.dtype)
-            fused = alpha[lvl] * fpn_feat + beta[lvl] * ext_lvl
+            if self.img_fusion_mode == 'weighted_sum':
+                fused = alpha[lvl] * fpn_feat + beta[lvl] * ext_lvl
+            else:
+                if self.img_fusion_concat_proj is None:
+                    raise RuntimeError(
+                        'img_fusion_concat_proj is not initialized while mode=concat_proj')
+                concat_2d = torch.cat(
+                    [
+                        (alpha[lvl] * fpn_feat).reshape(B_fpn * TN_fpn, C_fpn, H_fpn, W_fpn),
+                        (beta[lvl] * ext_lvl).reshape(B_fpn * TN_fpn, C_fpn, H_fpn, W_fpn),
+                    ],
+                    dim=1)
+                concat_2d = concat_2d.to(dtype=self.img_fusion_concat_proj.weight.dtype)
+                fused_2d = self.img_fusion_concat_proj(concat_2d)
+                if self.img_fusion_concat_act is not None:
+                    fused_2d = self.img_fusion_concat_act(fused_2d)
+                if self.img_fusion_concat_se is None:
+                    raise RuntimeError(
+                        'img_fusion_concat_se is not initialized while mode=concat_proj')
+                fused_2d = fused_2d * self.img_fusion_concat_se(fused_2d)
+                fused = fused_2d.view(B_fpn, TN_fpn, C_fpn, H_fpn, W_fpn).to(dtype=fpn_feat.dtype)
             fused_feats.append(fused)
         return fused_feats
 
@@ -585,6 +653,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
         points = inputs.get('points') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_metas = self._collect_img_metas(data_samples)
         voxel_semantics = self._stack_data_samples(data_samples, 'voxel_semantics')
         mask_camera = self._stack_data_samples(data_samples, 'mask_camera')
@@ -613,6 +684,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
         points = inputs.get('points') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_metas = self._collect_img_metas(data_samples)
         return self.simple_test(img_metas, img, points, rescale=rescale,
                                 mapanything_extra=mapanything_extra)
@@ -655,6 +729,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_feats = self.extract_img_feat(
             img,
             img_metas,
@@ -741,9 +818,85 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         return torch.tensor(values)
 
     def _normalize_mapanything_extra(self, mapanything_extra, batch_size):
+        def _is_batched_leaf(value):
+            if isinstance(value, (list, tuple)) and len(value) == batch_size:
+                return True
+            if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+                return True
+            if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+                return True
+            return False
+
+        def _select_batched_leaf(value, sample_idx):
+            if isinstance(value, list):
+                return copy.deepcopy(value[sample_idx])
+            if isinstance(value, tuple):
+                return copy.deepcopy(value[sample_idx])
+            if isinstance(value, torch.Tensor):
+                return value[sample_idx]
+            if isinstance(value, np.ndarray):
+                return np.array(value[sample_idx], copy=True)
+            return copy.deepcopy(value)
+
+        def _decollate_from_dict(extra_dict):
+            if not isinstance(extra_dict, dict):
+                return None
+            if 'views' not in extra_dict:
+                return None
+            views = extra_dict.get('views', None)
+            if not isinstance(views, (list, tuple)) or len(views) == 0:
+                return None
+            views = list(views)
+            if not isinstance(views[0], dict):
+                return None
+
+            has_batched_payload = False
+            for view in views:
+                if not isinstance(view, dict):
+                    continue
+                for value in view.values():
+                    if _is_batched_leaf(value):
+                        has_batched_payload = True
+                        break
+                if has_batched_payload:
+                    break
+            if not has_batched_payload:
+                return None
+
+            decollated = [dict() for _ in range(batch_size)]
+            for key, value in extra_dict.items():
+                if key == 'views':
+                    for sample_idx in range(batch_size):
+                        sample_views = []
+                        for view in views:
+                            if not isinstance(view, dict):
+                                sample_views.append(copy.deepcopy(view))
+                                continue
+                            sample_view = {}
+                            for view_key, view_value in view.items():
+                                if _is_batched_leaf(view_value):
+                                    sample_view[view_key] = _select_batched_leaf(
+                                        view_value, sample_idx)
+                                else:
+                                    sample_view[view_key] = copy.deepcopy(view_value)
+                            sample_views.append(sample_view)
+                        decollated[sample_idx]['views'] = sample_views
+                    continue
+
+                if _is_batched_leaf(value):
+                    for sample_idx in range(batch_size):
+                        decollated[sample_idx][key] = _select_batched_leaf(value, sample_idx)
+                else:
+                    for sample_idx in range(batch_size):
+                        decollated[sample_idx][key] = copy.deepcopy(value)
+            return decollated
+
         if mapanything_extra is None:
             return None
         if isinstance(mapanything_extra, dict):
+            decollated = _decollate_from_dict(mapanything_extra)
+            if decollated is not None:
+                return decollated
             return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
         if isinstance(mapanything_extra, tuple):
             mapanything_extra = list(mapanything_extra)
@@ -791,6 +944,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                             points=None,
                             rescale=False,
                             mapanything_extra=None):
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_feats = self.extract_img_feat(
             img,
             img_metas,

@@ -5,6 +5,7 @@ import mmcv
 import torch
 import numpy as np
 import os.path as osp
+from PIL import Image
 from numpy.linalg import inv
 from mmengine.dist import get_dist_info
 from mmengine.fileio import FileClient, get
@@ -1011,6 +1012,429 @@ class LoadPointsFromMultiViewDepth:
         points = points[:, self.use_dim]
         points_class = get_points_type(self.coord_type)
         results['points'] = points_class(points, points_dim=points.shape[-1], attribute_dims=None)
+        return results
+
+
+@TRANSFORMS.register_module()
+class LoadMapAnythingExtraFromDepth:
+    """Construct mapanything_extra views from depth + intrinsics + camera poses.
+
+    This transform is intended to run after image augmentations so that depth and
+    intrinsics are synchronized with the image-domain transform.
+    """
+
+    def __init__(self,
+                 cam_types=None,
+                 depth_key='depth_path',
+                 fallback_depth_from_image_path=True,
+                 strict=True,
+                 min_valid_depth_ratio=1e-4,
+                 depth_nonnegative_eps=-1e-6,
+                 apply_ida_to_depth=True,
+                 apply_ida_to_intrinsics=True,
+                 filter_depth_by_pcrange=False,
+                 point_cloud_range=None,
+                 rotation_atol=1e-3,
+                 rotation_rtol=1e-3):
+        self.cam_types = list(cam_types) if cam_types is not None else None
+        self.depth_key = depth_key
+        self.fallback_depth_from_image_path = bool(fallback_depth_from_image_path)
+        self.strict = bool(strict)
+        self.min_valid_depth_ratio = float(min_valid_depth_ratio)
+        self.depth_nonnegative_eps = float(depth_nonnegative_eps)
+        self.apply_ida_to_depth = bool(apply_ida_to_depth)
+        self.apply_ida_to_intrinsics = bool(apply_ida_to_intrinsics)
+        self.filter_depth_by_pcrange = bool(filter_depth_by_pcrange)
+        self.point_cloud_range = self._parse_point_cloud_range(point_cloud_range) \
+            if self.filter_depth_by_pcrange else None
+        self.rotation_atol = float(rotation_atol)
+        self.rotation_rtol = float(rotation_rtol)
+
+    def _path_keys(self, path):
+        if not isinstance(path, str) or not path:
+            return []
+        keys = set()
+        norm_path = osp.normpath(path)
+        keys.add(norm_path)
+        keys.add(osp.normpath(osp.abspath(path)))
+        try:
+            keys.add(osp.normpath(osp.relpath(path)))
+        except Exception:
+            pass
+        return list(keys)
+
+    def _register_cam_info(self, lookup, cam_name, cam_info):
+        if not isinstance(cam_info, dict):
+            return
+        image_path = cam_info.get('data_path', None)
+        for key in self._path_keys(image_path):
+            if key not in lookup:
+                lookup[key] = (cam_name, cam_info)
+
+    def _build_cam_lookup(self, results):
+        lookup = {}
+        cam_types = _resolve_cam_types(results, self.cam_types)
+
+        cams = results.get('cams', {})
+        if isinstance(cams, dict):
+            for cam_name in cam_types:
+                if cam_name in cams:
+                    self._register_cam_info(lookup, cam_name, cams[cam_name])
+            for cam_name, cam_info in cams.items():
+                self._register_cam_info(lookup, cam_name, cam_info)
+
+        cam_sweeps = results.get('cam_sweeps', {})
+        if isinstance(cam_sweeps, dict):
+            for side in ['prev', 'next']:
+                sweeps = cam_sweeps.get(side, [])
+                if not isinstance(sweeps, list):
+                    continue
+                for sweep in sweeps:
+                    if not isinstance(sweep, dict):
+                        continue
+                    for cam_name, cam_info in sweep.items():
+                        self._register_cam_info(lookup, cam_name, cam_info)
+        elif isinstance(cam_sweeps, list):
+            for sweep in cam_sweeps:
+                if not isinstance(sweep, dict):
+                    continue
+                for cam_name, cam_info in sweep.items():
+                    self._register_cam_info(lookup, cam_name, cam_info)
+        return lookup
+
+    def _depth_candidates_from_image(self, image_path):
+        if not isinstance(image_path, str) or not image_path:
+            return []
+        path = osp.normpath(image_path)
+        parent = osp.dirname(path)
+        dirname = osp.basename(parent)
+        stem, _ = osp.splitext(osp.basename(path))
+        if not stem.endswith('_depth'):
+            stem = stem + '_depth'
+        if dirname.startswith('image_'):
+            depth_dir = osp.join(osp.dirname(parent), dirname.replace('image_', 'depth_', 1))
+        else:
+            depth_dir = parent
+        return [
+            osp.join(depth_dir, stem + '.png'),
+            osp.join(depth_dir, stem + '.npy'),
+        ]
+
+    def _resolve_depth_path(self, cam_info, image_path):
+        candidates = []
+        depth_path = cam_info.get(self.depth_key, None) if isinstance(cam_info, dict) else None
+        if isinstance(depth_path, str) and depth_path:
+            candidates.append(depth_path)
+        if self.fallback_depth_from_image_path:
+            candidates.extend(self._depth_candidates_from_image(image_path))
+
+        checked = set()
+        for cand in candidates:
+            if not isinstance(cand, str) or not cand:
+                continue
+            for key in self._path_keys(cand):
+                if key in checked:
+                    continue
+                checked.add(key)
+                if osp.exists(key):
+                    return key
+        return candidates[0] if candidates else None
+
+    def _load_depth(self, depth_path):
+        if depth_path is None:
+            return None
+        if depth_path.endswith('.npy'):
+            depth = np.load(depth_path)
+        else:
+            depth_rgba = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            if depth_rgba is None:
+                return None
+            depth = depth_rgba.view('<f4').squeeze()
+        if depth is None:
+            return None
+        if depth.ndim > 2:
+            depth = np.squeeze(depth)
+        if depth.ndim != 2:
+            return None
+        return depth.astype(np.float32)
+
+    @staticmethod
+    def _as_rotation_matrix(rotation):
+        rot = np.asarray(rotation)
+        if rot.shape == (3, 3):
+            return rot.astype(np.float64)
+
+        quat = np.asarray(rotation, dtype=np.float64).reshape(-1)
+        if quat.size != 4:
+            raise ValueError(f'Unsupported rotation shape: {rot.shape}')
+        norm = np.linalg.norm(quat)
+        if norm <= 0:
+            raise ValueError('Quaternion rotation has zero norm')
+        w, x, y, z = quat / norm
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], dtype=np.float64)
+
+    def _validate_rotation_matrix(self, rotation, context):
+        rot = self._as_rotation_matrix(rotation)
+        if not np.all(np.isfinite(rot)):
+            raise ValueError(f'{context}: rotation contains non-finite values')
+        ortho = rot.T @ rot
+        if not np.allclose(ortho, np.eye(3), rtol=self.rotation_rtol, atol=self.rotation_atol):
+            raise ValueError(f'{context}: rotation is not orthonormal')
+        det = float(np.linalg.det(rot))
+        if (not np.isfinite(det)) or det <= 0:
+            raise ValueError(f'{context}: rotation determinant must be positive, got {det}')
+        return rot
+
+    @staticmethod
+    def _image_hw(img):
+        if isinstance(img, np.ndarray):
+            if img.ndim < 2:
+                raise ValueError(f'Unsupported image ndim={img.ndim}')
+            return int(img.shape[0]), int(img.shape[1])
+        if isinstance(img, torch.Tensor):
+            if img.dim() == 3:
+                if img.shape[0] in (1, 3):
+                    return int(img.shape[1]), int(img.shape[2])
+                return int(img.shape[0]), int(img.shape[1])
+            if img.dim() == 2:
+                return int(img.shape[0]), int(img.shape[1])
+        raise TypeError(f'Unsupported image type for shape inference: {type(img)}')
+
+    def _apply_ida_to_depth(self, depth, ida_aug_params):
+        if not self.apply_ida_to_depth:
+            return depth
+        if ida_aug_params is None:
+            return depth
+
+        resize_dims = ida_aug_params.get('resize_dims', None)
+        crop = ida_aug_params.get('crop', None)
+        flip = bool(ida_aug_params.get('flip', False))
+        rotate = float(ida_aug_params.get('rotate', 0.0))
+        if resize_dims is None or crop is None:
+            if self.strict:
+                raise KeyError('ida_aug_params must contain resize_dims and crop')
+            return depth
+
+        pil_depth = Image.fromarray(depth.astype(np.float32), mode='F')
+        pil_depth = pil_depth.resize(tuple(int(v) for v in resize_dims), resample=Image.BILINEAR)
+        pil_depth = pil_depth.crop(tuple(int(v) for v in crop))
+        if flip:
+            pil_depth = pil_depth.transpose(method=Image.FLIP_LEFT_RIGHT)
+        if abs(rotate) > 1e-6:
+            pil_depth = pil_depth.rotate(rotate, resample=Image.BILINEAR)
+        return np.array(pil_depth, dtype=np.float32)
+
+    def _apply_ida_to_intrinsics(self, intrinsics, ida_aug_params):
+        if not self.apply_ida_to_intrinsics:
+            return intrinsics
+        if ida_aug_params is None:
+            return intrinsics
+
+        ida_mat = ida_aug_params.get('ida_mat', None)
+        if ida_mat is None:
+            if self.strict:
+                raise KeyError('ida_aug_params must contain ida_mat')
+            return intrinsics
+        ida_mat = np.asarray(ida_mat, dtype=np.float64)
+        if ida_mat.shape != (4, 4):
+            raise ValueError(f'ida_aug_params["ida_mat"] must be 4x4, got {ida_mat.shape}')
+        ida_affine = ida_mat[:3, :3]
+        return (ida_affine @ intrinsics.astype(np.float64)).astype(np.float32)
+
+    def _find_cam_info(self, cam_lookup, image_path):
+        for key in self._path_keys(image_path):
+            if key in cam_lookup:
+                return cam_lookup[key][1]
+
+        if isinstance(image_path, str) and image_path:
+            basename = osp.basename(image_path)
+            matched = []
+            for key, (_, cam_info) in cam_lookup.items():
+                if isinstance(key, str) and key.endswith(basename):
+                    matched.append(cam_info)
+            if len(matched) == 1:
+                return matched[0]
+        return None
+
+    def _validate_intrinsics(self, intrinsics, context):
+        if intrinsics.shape != (3, 3):
+            raise ValueError(f'{context}: intrinsics must be 3x3, got {intrinsics.shape}')
+        if not np.all(np.isfinite(intrinsics)):
+            raise ValueError(f'{context}: intrinsics contain non-finite values')
+        if abs(float(intrinsics[0, 0])) <= 1e-6 or abs(float(intrinsics[1, 1])) <= 1e-6:
+            raise ValueError(
+                f'{context}: intrinsics fx/fy magnitude must be positive, '
+                f'got fx={intrinsics[0, 0]}, fy={intrinsics[1, 1]}')
+
+    def _validate_depth(self, depth, context):
+        if depth.ndim != 2:
+            raise ValueError(f'{context}: depth must be 2D HxW, got shape={depth.shape}')
+        if not np.all(np.isfinite(depth)):
+            raise ValueError(f'{context}: depth contains non-finite values')
+        if depth.size == 0:
+            raise ValueError(f'{context}: empty depth map')
+
+        min_depth = float(np.min(depth))
+        if min_depth < self.depth_nonnegative_eps:
+            raise ValueError(
+                f'{context}: depth has negative values (min={min_depth}, '
+                f'eps={self.depth_nonnegative_eps})')
+
+        valid_mask = depth > 0.0
+        valid_ratio = float(np.mean(valid_mask))
+        if valid_ratio < self.min_valid_depth_ratio:
+            raise ValueError(
+                f'{context}: valid depth ratio too low ({valid_ratio:.6f} < {self.min_valid_depth_ratio:.6f})')
+
+    @staticmethod
+    def _parse_point_cloud_range(point_cloud_range):
+        if point_cloud_range is None:
+            raise ValueError(
+                'point_cloud_range must be provided when filter_depth_by_pcrange=True')
+        pcr = np.asarray(point_cloud_range, dtype=np.float32).reshape(-1)
+        if pcr.size != 6:
+            raise ValueError(
+                f'point_cloud_range must contain 6 values, got shape={pcr.shape}')
+        if not np.all(np.isfinite(pcr)):
+            raise ValueError('point_cloud_range contains non-finite values')
+        if not (pcr[0] < pcr[3] and pcr[1] < pcr[4] and pcr[2] < pcr[5]):
+            raise ValueError(
+                f'point_cloud_range min/max invalid: {pcr.tolist()}')
+        return pcr
+
+    def _filter_depth_by_point_cloud_range(self, depth, intrinsics, camera_pose, context):
+        if not self.filter_depth_by_pcrange:
+            return depth
+
+        valid_depth = np.isfinite(depth) & (depth > 0.0)
+        if not np.any(valid_depth):
+            return np.zeros_like(depth, dtype=np.float32)
+
+        v, u = np.nonzero(valid_depth)
+        z = depth[v, u].astype(np.float64)
+
+        fx = float(intrinsics[0, 0])
+        fy = float(intrinsics[1, 1])
+        cx = float(intrinsics[0, 2])
+        cy = float(intrinsics[1, 2])
+        if abs(fx) <= 1e-6 or abs(fy) <= 1e-6:
+            raise ValueError(
+                f'{context}: invalid intrinsics for unprojection, fx={fx}, fy={fy}')
+
+        x = (u.astype(np.float64) - cx) * z / fx
+        y = (v.astype(np.float64) - cy) * z / fy
+        points_cam = np.stack([x, y, z], axis=1)
+
+        rot = np.asarray(camera_pose[:3, :3], dtype=np.float64)
+        trans = np.asarray(camera_pose[:3, 3], dtype=np.float64)
+        points_world = (rot @ points_cam.T).T + trans[None, :]
+
+        pcr = self.point_cloud_range
+        in_range = (
+            (points_world[:, 0] >= float(pcr[0])) & (points_world[:, 0] <= float(pcr[3])) &
+            (points_world[:, 1] >= float(pcr[1])) & (points_world[:, 1] <= float(pcr[4])) &
+            (points_world[:, 2] >= float(pcr[2])) & (points_world[:, 2] <= float(pcr[5]))
+        )
+
+        filtered = np.zeros_like(depth, dtype=np.float32)
+        if np.any(in_range):
+            keep_v = v[in_range]
+            keep_u = u[in_range]
+            filtered[keep_v, keep_u] = depth[keep_v, keep_u]
+        return filtered
+
+    def _build_camera_pose(self, cam_info, context):
+        if not isinstance(cam_info, dict):
+            raise TypeError(f'{context}: cam_info must be dict, got {type(cam_info)}')
+        rotation = cam_info.get('sensor2global_rotation', None)
+        translation = cam_info.get('sensor2global_translation', None)
+        if rotation is None or translation is None:
+            raise KeyError(f'{context}: missing sensor2global rotation/translation')
+
+        rot = self._validate_rotation_matrix(rotation, context=context)
+        trans = np.asarray(translation, dtype=np.float64).reshape(-1)
+        if trans.size != 3:
+            raise ValueError(
+                f'{context}: sensor2global_translation must have 3 values, got shape={trans.shape}')
+        if not np.all(np.isfinite(trans)):
+            raise ValueError(f'{context}: sensor2global_translation contains non-finite values')
+
+        cam2world = np.eye(4, dtype=np.float32)
+        cam2world[:3, :3] = rot.astype(np.float32)
+        cam2world[:3, 3] = trans.astype(np.float32)
+        return cam2world
+
+    def __call__(self, results):
+        filenames = results.get('filename', [])
+        imgs = results.get('img', [])
+        if not isinstance(filenames, list):
+            filenames = list(filenames)
+        if not isinstance(imgs, list):
+            imgs = list(imgs)
+        if len(filenames) != len(imgs):
+            raise ValueError(
+                f'filename/img length mismatch: len(filename)={len(filenames)} vs len(img)={len(imgs)}')
+        if len(filenames) == 0:
+            raise ValueError('Empty filename list: cannot build mapanything_extra')
+
+        cam_lookup = self._build_cam_lookup(results)
+        if self.strict and len(cam_lookup) == 0:
+            raise ValueError('No camera metadata found in results (expected cams/cam_sweeps)')
+
+        ida_aug_params = results.get('ida_aug_params', None)
+        views = []
+        for idx, (image_path, img) in enumerate(zip(filenames, imgs)):
+            context = f'view[{idx}] image={image_path}'
+            cam_info = self._find_cam_info(cam_lookup, image_path)
+            if cam_info is None:
+                raise FileNotFoundError(f'{context}: failed to match camera metadata by path')
+
+            depth_path = self._resolve_depth_path(cam_info, image_path)
+            if depth_path is None or (not osp.exists(depth_path)):
+                raise FileNotFoundError(f'{context}: depth file does not exist ({depth_path})')
+            depth = self._load_depth(depth_path)
+            if depth is None:
+                raise FileNotFoundError(f'{context}: failed to decode depth from {depth_path}')
+
+            depth = self._apply_ida_to_depth(depth, ida_aug_params)
+            target_hw = self._image_hw(img)
+            if depth.shape != target_hw:
+                raise ValueError(
+                    f'{context}: depth/image shape mismatch after augmentation, '
+                    f'depth={depth.shape}, image={target_hw}')
+            depth = np.ascontiguousarray(depth, dtype=np.float32)
+
+            intrinsics = np.asarray(cam_info.get('cam_intrinsic', None), dtype=np.float32)
+            self._validate_intrinsics(intrinsics, context=context)
+            intrinsics = self._apply_ida_to_intrinsics(intrinsics, ida_aug_params)
+            self._validate_intrinsics(intrinsics, context=context)
+
+            camera_pose = self._build_camera_pose(cam_info, context=context)
+            if not np.all(np.isfinite(camera_pose)):
+                raise ValueError(f'{context}: camera pose contains non-finite values')
+
+            depth = self._filter_depth_by_point_cloud_range(
+                depth=depth,
+                intrinsics=intrinsics,
+                camera_pose=camera_pose,
+                context=context)
+            self._validate_depth(depth, context=context)
+
+            views.append(dict(
+                depth_z=depth,
+                intrinsics=np.ascontiguousarray(intrinsics, dtype=np.float32),
+                camera_poses=np.ascontiguousarray(camera_pose, dtype=np.float32),
+                is_metric_scale=True,
+            ))
+
+        if len(views) != len(imgs):
+            raise ValueError(
+                f'mapanything_extra views length mismatch: expected {len(imgs)}, got {len(views)}')
+        results['mapanything_extra'] = dict(views=views)
         return results
 
 

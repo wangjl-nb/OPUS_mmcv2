@@ -20,17 +20,19 @@ class MapAnythingOccEncoder(BaseModule):
         img_metas: list[dict]
         mapanything_extra: optional list[dict] for modality extension
     Output:
-        Tensor[B, TN, C, Hf, Wf]
+        Tensor[B, TN, C, Hf, Wf] or list[Tensor[B, TN, C, H_i, W_i]]
     """
 
     def __init__(self,
                  repo_root,
                  mapanything_model_cfg,
                  mapanything_preprocess_cfg=None,
+                 anyup_cfg=None,
                  num_views=6,
                  num_frames=None,
                  chunk_by_frame=True,
                  freeze=True,
+                 freeze_via_wrapper=False,
                  enable_random_mask=False,
                  random_mask_cfg=None,
                  strip_to_feature_mode=True,
@@ -45,6 +47,7 @@ class MapAnythingOccEncoder(BaseModule):
         self.num_views = int(num_views)
         self.num_frames = None if num_frames is None else int(num_frames)
         self.chunk_by_frame = bool(chunk_by_frame)
+        self.freeze_via_wrapper = bool(freeze_via_wrapper)
         self.strict_shapes = bool(strict_shapes)
         self.expect_contiguous = bool(expect_contiguous)
         self.tn_align_mode = tn_align_mode
@@ -58,6 +61,7 @@ class MapAnythingOccEncoder(BaseModule):
             repo_root=repo_root,
             mapanything_model_cfg=mapanything_model_cfg,
             mapanything_preprocess_cfg=mapanything_preprocess_cfg,
+            anyup_cfg=anyup_cfg,
             freeze=freeze,
             enable_random_mask=enable_random_mask,
             random_mask_cfg=random_mask_cfg,
@@ -315,6 +319,7 @@ class MapAnythingOccEncoder(BaseModule):
 
         if self.chunk_by_frame:
             feats = []
+            multi_level_feats = None
             num_frames = total_views // self.num_views
             for frame_idx in range(num_frames):
                 start = frame_idx * self.num_views
@@ -327,19 +332,56 @@ class MapAnythingOccEncoder(BaseModule):
                     points=points,
                     img_metas=chunk_metas,
                     mapanything_extra=chunk_extra)
-                if self.strict_shapes and chunk_feat.shape[:2] != (batch_size, self.num_views):
-                    raise ValueError(
-                        f'Wrapper chunk output shape mismatch at frame {frame_idx}: '
-                        f'expected [B={batch_size}, TN_chunk={self.num_views}, ...], '
-                        f'got {tuple(chunk_feat.shape)}')
-                feats.append(chunk_feat)
-            output = torch.cat(feats, dim=1)
+                if isinstance(chunk_feat, (list, tuple)):
+                    if multi_level_feats is None:
+                        multi_level_feats = [[] for _ in range(len(chunk_feat))]
+                    elif len(chunk_feat) != len(multi_level_feats):
+                        raise ValueError(
+                            f'Wrapper chunk level count mismatch at frame {frame_idx}: '
+                            f'expected {len(multi_level_feats)}, got {len(chunk_feat)}')
+                    for lvl, lvl_feat in enumerate(chunk_feat):
+                        if self.strict_shapes and lvl_feat.shape[:2] != (batch_size, self.num_views):
+                            raise ValueError(
+                                f'Wrapper chunk output shape mismatch at frame {frame_idx}, level {lvl}: '
+                                f'expected [B={batch_size}, TN_chunk={self.num_views}, ...], '
+                                f'got {tuple(lvl_feat.shape)}')
+                        multi_level_feats[lvl].append(lvl_feat)
+                else:
+                    if self.strict_shapes and chunk_feat.shape[:2] != (batch_size, self.num_views):
+                        raise ValueError(
+                            f'Wrapper chunk output shape mismatch at frame {frame_idx}: '
+                            f'expected [B={batch_size}, TN_chunk={self.num_views}, ...], '
+                            f'got {tuple(chunk_feat.shape)}')
+                    feats.append(chunk_feat)
+            if multi_level_feats is not None:
+                if feats:
+                    raise RuntimeError(
+                        'Wrapper returned mixed tensor/list chunk outputs, which is unsupported.')
+                output = [torch.cat(level_chunks, dim=1) for level_chunks in multi_level_feats]
+            else:
+                output = torch.cat(feats, dim=1)
         else:
             output = self.wrapper(
                 img,
                 points=points,
                 img_metas=img_metas,
                 mapanything_extra=mapanything_extra)
+
+        if isinstance(output, (list, tuple)):
+            normalized_levels = []
+            for lvl, lvl_feat in enumerate(output):
+                if self.strict_shapes and lvl_feat.shape[:2] != (batch_size, total_views):
+                    raise ValueError(
+                        f'Wrapper output shape mismatch at level {lvl}: '
+                        f'expected [B={batch_size}, TN={total_views}, ...], '
+                        f'got {tuple(lvl_feat.shape)}')
+                if self.strict_shapes and lvl_feat.device != img.device:
+                    raise ValueError(
+                        f'Wrapper output device mismatch at level {lvl}: '
+                        f'expected {img.device}, got {lvl_feat.device}')
+                normalized_levels.append(
+                    lvl_feat.contiguous() if self.expect_contiguous else lvl_feat)
+            return normalized_levels
 
         if self.strict_shapes and output.shape[:2] != (batch_size, total_views):
             raise ValueError(
