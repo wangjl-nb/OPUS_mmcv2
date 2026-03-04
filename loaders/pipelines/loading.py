@@ -1,17 +1,21 @@
 import copy
 import os
+import cv2
 import mmcv
 import torch
 import numpy as np
 import os.path as osp
+from PIL import Image
 from numpy.linalg import inv
 from mmengine.dist import get_dist_info
 from mmengine.fileio import FileClient, get
 from mmengine.utils import check_file_exist
 try:
     from mmdet3d.structures.points import BasePoints
+    from mmdet3d.structures.points import get_points_type
 except Exception:  # pragma: no cover
     from mmdet3d.core.points import BasePoints
+    from mmdet3d.core.points import get_points_type
 from mmdet3d.registry import TRANSFORMS
 from ..utils import compose_ego2img
 
@@ -655,6 +659,782 @@ class LoadMultiViewImageFromMultiSweepsFutureInterleave:
                 results['filename'].append(results_next['filename'][i * num_views + j])
                 results['ego2img'].append(results_next['ego2img'][i * num_views + j])
 
+        return results
+
+
+@TRANSFORMS.register_module()
+class LoadPointsFromMultiViewDepth:
+    """Build pseudo-LiDAR points from selected multi-view depth maps.
+
+    The transform keeps the point tensor format compatible with the existing
+    LiDAR pipeline: ``[x, y, z, intensity, time]`` in LiDAR coordinates.
+    """
+
+    def __init__(self,
+                 cam_types=None,
+                 depth_key='depth_path',
+                 coord_type='LIDAR',
+                 load_dim=5,
+                 use_dim=[0, 1, 2, 3, 4],
+                 time_dim=4,
+                 sample_stride=7,
+                 max_points_total=560000,
+                 depth_min=0.1,
+                 depth_max=80.0,
+                 coord_convention='tartanair_ned',
+                 intensity_value=0.0,
+                 strict_depth_exist=False,
+                 fallback_depth_from_image_path=True,
+                 history_dynamic_extrinsics=True,
+                 dynamic_extrinsics_fallback='static'):
+        if isinstance(use_dim, int):
+            use_dim = list(range(use_dim))
+        assert max(use_dim) < load_dim, \
+            f'Expect all used dimensions < {load_dim}, got {use_dim}'
+        assert coord_type in ['LIDAR', 'DEPTH', 'CAMERA']
+        assert coord_convention in ['tartanair_ned', 'opencv']
+        assert dynamic_extrinsics_fallback in ['static', 'skip', 'raise'], \
+            f'Unsupported dynamic_extrinsics_fallback: {dynamic_extrinsics_fallback}'
+
+        self.cam_types = list(cam_types) if cam_types is not None else None
+        self.depth_key = depth_key
+        self.coord_type = coord_type
+        self.load_dim = load_dim
+        self.use_dim = use_dim
+        self.time_dim = time_dim
+        self.sample_stride = max(int(sample_stride), 1)
+        self.max_points_total = int(max_points_total) if max_points_total is not None else 0
+        self.depth_min = float(depth_min)
+        self.depth_max = float(depth_max)
+        self.coord_convention = coord_convention
+        self.intensity_value = float(intensity_value)
+        self.strict_depth_exist = bool(strict_depth_exist)
+        self.fallback_depth_from_image_path = bool(fallback_depth_from_image_path)
+        self.history_dynamic_extrinsics = bool(history_dynamic_extrinsics)
+        self.dynamic_extrinsics_fallback = dynamic_extrinsics_fallback
+
+    def _path_keys(self, path):
+        if not isinstance(path, str) or not path:
+            return []
+        keys = set()
+        norm_path = osp.normpath(path)
+        keys.add(norm_path)
+        keys.add(osp.normpath(osp.abspath(path)))
+        try:
+            keys.add(osp.normpath(osp.relpath(path)))
+        except Exception:
+            pass
+        return list(keys)
+
+    def _register_cam_info(self, lookup, cam_name, cam_info):
+        if not isinstance(cam_info, dict):
+            return
+        image_path = cam_info.get('data_path', None)
+        for key in self._path_keys(image_path):
+            if key not in lookup:
+                lookup[key] = (cam_name, cam_info)
+
+    def _build_cam_lookup(self, results):
+        lookup = {}
+        cam_types = _resolve_cam_types(results, self.cam_types)
+
+        cams = results.get('cams', {})
+        if isinstance(cams, dict):
+            for cam_name in cam_types:
+                if cam_name in cams:
+                    self._register_cam_info(lookup, cam_name, cams[cam_name])
+            for cam_name, cam_info in cams.items():
+                self._register_cam_info(lookup, cam_name, cam_info)
+
+        cam_sweeps = results.get('cam_sweeps', {})
+        if isinstance(cam_sweeps, dict):
+            for side in ['prev', 'next']:
+                sweeps = cam_sweeps.get(side, [])
+                if not isinstance(sweeps, list):
+                    continue
+                for sweep in sweeps:
+                    if not isinstance(sweep, dict):
+                        continue
+                    for cam_name, cam_info in sweep.items():
+                        self._register_cam_info(lookup, cam_name, cam_info)
+        elif isinstance(cam_sweeps, list):
+            for sweep in cam_sweeps:
+                if not isinstance(sweep, dict):
+                    continue
+                for cam_name, cam_info in sweep.items():
+                    self._register_cam_info(lookup, cam_name, cam_info)
+
+        return lookup, cam_types
+
+    def _depth_candidates_from_image(self, image_path):
+        if not isinstance(image_path, str) or not image_path:
+            return []
+        path = osp.normpath(image_path)
+        parent = osp.dirname(path)
+        dirname = osp.basename(parent)
+        stem, _ = osp.splitext(osp.basename(path))
+
+        if not stem.endswith('_depth'):
+            stem = stem + '_depth'
+
+        if dirname.startswith('image_'):
+            depth_dir = osp.join(osp.dirname(parent), dirname.replace('image_', 'depth_', 1))
+        else:
+            depth_dir = parent
+        return [
+            osp.join(depth_dir, stem + '.png'),
+            osp.join(depth_dir, stem + '.npy'),
+        ]
+
+    def _resolve_depth_path(self, cam_info, image_path):
+        candidates = []
+        depth_path = cam_info.get(self.depth_key, None) if isinstance(cam_info, dict) else None
+        if isinstance(depth_path, str) and depth_path:
+            candidates.append(depth_path)
+        if self.fallback_depth_from_image_path:
+            candidates.extend(self._depth_candidates_from_image(image_path))
+
+        checked = set()
+        for cand in candidates:
+            if not isinstance(cand, str) or not cand:
+                continue
+            for key in self._path_keys(cand):
+                if key in checked:
+                    continue
+                checked.add(key)
+                if osp.exists(key):
+                    return key
+        return candidates[0] if candidates else None
+
+    def _load_depth(self, depth_path):
+        if depth_path is None:
+            return None
+        if depth_path.endswith('.npy'):
+            depth = np.load(depth_path)
+        else:
+            depth_rgba = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            if depth_rgba is None:
+                return None
+            depth = depth_rgba.view('<f4').squeeze()
+        if depth is None:
+            return None
+        if depth.ndim > 2:
+            depth = np.squeeze(depth)
+        return depth.astype(np.float32)
+
+    def _depth_to_points_camera(self, depth, cam_intrinsic):
+        if depth is None or depth.ndim != 2:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        h, w = depth.shape
+        v_idx = np.arange(0, h, self.sample_stride, dtype=np.int32)
+        u_idx = np.arange(0, w, self.sample_stride, dtype=np.int32)
+        if v_idx.size == 0 or u_idx.size == 0:
+            return np.zeros((0, 3), dtype=np.float32)
+
+        depth_sub = depth[np.ix_(v_idx, u_idx)]
+        u, v = np.meshgrid(u_idx.astype(np.float32) + 0.5,
+                           v_idx.astype(np.float32) + 0.5)
+
+        valid = np.isfinite(depth_sub)
+        valid &= (depth_sub > self.depth_min) & (depth_sub < self.depth_max)
+        if not np.any(valid):
+            return np.zeros((0, 3), dtype=np.float32)
+
+        d = depth_sub[valid]
+        u = u[valid]
+        v = v[valid]
+
+        intrinsic = np.asarray(cam_intrinsic, dtype=np.float32)
+        fx = intrinsic[0, 0]
+        fy = intrinsic[1, 1]
+        cx = intrinsic[0, 2]
+        cy = intrinsic[1, 2]
+        x = (u - cx) * d / fx
+        y = (v - cy) * d / fy
+
+        if self.coord_convention == 'tartanair_ned':
+            pts_cam = np.stack([d, x, y], axis=1)
+        else:
+            pts_cam = np.stack([x, y, d], axis=1)
+        return pts_cam.astype(np.float32)
+
+    def _as_rotation_matrix(self, rotation):
+        rot = np.asarray(rotation)
+        if rot.shape == (3, 3):
+            return rot.astype(np.float64)
+
+        quat = np.asarray(rotation, dtype=np.float64).reshape(-1)
+        if quat.size != 4:
+            raise ValueError(f'Unsupported rotation shape: {rot.shape}')
+        norm = np.linalg.norm(quat)
+        if norm <= 0:
+            raise ValueError('Quaternion rotation has zero norm')
+        w, x, y, z = quat / norm
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], dtype=np.float64)
+
+    def _as_translation(self, translation):
+        trans = np.asarray(translation, dtype=np.float64).reshape(-1)
+        if trans.size != 3:
+            raise ValueError(f'Unsupported translation shape: {np.asarray(translation).shape}')
+        return trans
+
+    def _compose_row_transform(self, rot_ab, trans_ab, rot_bc, trans_bc):
+        rot_ac = rot_bc @ rot_ab
+        trans_ac = trans_ab @ rot_bc.T + trans_bc
+        return rot_ac, trans_ac
+
+    def _invert_row_transform(self, rot_ab, trans_ab):
+        rot_ba = rot_ab.T
+        trans_ba = -trans_ab @ rot_ab
+        return rot_ba, trans_ba
+
+    def _get_static_sensor2lidar(self, cam_info):
+        rot = np.asarray(cam_info['sensor2lidar_rotation'], dtype=np.float32)
+        trans = np.asarray(cam_info['sensor2lidar_translation'], dtype=np.float32).reshape(-1)
+        if rot.shape != (3, 3):
+            raise ValueError(f'Invalid sensor2lidar_rotation shape: {rot.shape}')
+        if trans.size != 3:
+            raise ValueError(f'Invalid sensor2lidar_translation shape: {trans.shape}')
+        return rot, trans
+
+    def _get_dynamic_sensor2lidar(self, cam_info, results):
+        rot_eg = self._as_rotation_matrix(results['ego2global_rotation'])
+        trans_eg = self._as_translation(results['ego2global_translation'])
+        rot_le = self._as_rotation_matrix(results['lidar2ego_rotation'])
+        trans_le = self._as_translation(results['lidar2ego_translation'])
+
+        rot_lg, trans_lg = self._compose_row_transform(rot_le, trans_le, rot_eg, trans_eg)
+        rot_gl, trans_gl = self._invert_row_transform(rot_lg, trans_lg)
+
+        rot_sg = self._as_rotation_matrix(cam_info['sensor2global_rotation'])
+        trans_sg = self._as_translation(cam_info['sensor2global_translation'])
+        rot_sl, trans_sl = self._compose_row_transform(rot_sg, trans_sg, rot_gl, trans_gl)
+
+        return rot_sl.astype(np.float32), trans_sl.astype(np.float32)
+
+    def _resolve_sensor2lidar(self, cam_info, results, use_dynamic):
+        if not use_dynamic:
+            return self._get_static_sensor2lidar(cam_info)
+
+        try:
+            return self._get_dynamic_sensor2lidar(cam_info, results)
+        except Exception:
+            if self.dynamic_extrinsics_fallback == 'raise':
+                raise
+            if self.dynamic_extrinsics_fallback == 'skip':
+                return None, None
+            return self._get_static_sensor2lidar(cam_info)
+
+    def _camera_to_lidar(self, pts_cam, cam_info, results=None, use_dynamic=False):
+        if pts_cam.shape[0] == 0:
+            return pts_cam
+        rot, trans = self._resolve_sensor2lidar(cam_info, results, use_dynamic)
+        if rot is None or trans is None:
+            return None
+        return pts_cam @ rot.T + trans[None, :]
+
+    def __call__(self, results):
+        filenames = results.get('filename', [])
+        img_timestamps = results.get('img_timestamp', [])
+        if not isinstance(filenames, list):
+            filenames = list(filenames)
+        if not isinstance(img_timestamps, list):
+            img_timestamps = list(img_timestamps)
+
+        cam_lookup, cam_types = self._build_cam_lookup(results)
+        num_views = _resolve_num_views(results, cam_types)
+        base_timestamp = float(results.get('timestamp', 0.0))
+
+        point_chunks = []
+        for idx, image_path in enumerate(filenames):
+            match = None
+            for key in self._path_keys(image_path):
+                if key in cam_lookup:
+                    match = cam_lookup[key]
+                    break
+            if match is None:
+                if self.strict_depth_exist:
+                    raise FileNotFoundError(f'No camera metadata matched for image: {image_path}')
+                continue
+
+            _, cam_info = match
+            depth_path = self._resolve_depth_path(cam_info, image_path)
+            if depth_path is None or (not osp.exists(depth_path)):
+                if self.strict_depth_exist:
+                    raise FileNotFoundError(f'No depth file for image: {image_path}')
+                continue
+
+            depth = self._load_depth(depth_path)
+            if depth is None:
+                if self.strict_depth_exist:
+                    raise FileNotFoundError(f'Failed to load depth file: {depth_path}')
+                continue
+
+            pts_cam = self._depth_to_points_camera(depth, cam_info['cam_intrinsic'])
+            if pts_cam.shape[0] == 0:
+                continue
+            use_dynamic = self.history_dynamic_extrinsics and (idx >= num_views)
+            pts_lidar = self._camera_to_lidar(
+                pts_cam,
+                cam_info,
+                results=results,
+                use_dynamic=use_dynamic)
+            if pts_lidar is None:
+                continue
+
+            if idx < num_views:
+                time_delta = 0.0
+            else:
+                img_ts = float(img_timestamps[idx]) if idx < len(img_timestamps) else base_timestamp
+                time_delta = max(base_timestamp - img_ts, 0.0)
+                if abs(time_delta) < 1e-6:
+                    time_delta = 0.0
+
+            intensity = np.full((pts_lidar.shape[0], 1), self.intensity_value, dtype=np.float32)
+            time_col = np.full((pts_lidar.shape[0], 1), time_delta, dtype=np.float32)
+            pts = np.concatenate([pts_lidar.astype(np.float32), intensity, time_col], axis=1)
+            point_chunks.append(pts)
+
+        if point_chunks:
+            points = np.concatenate(point_chunks, axis=0)
+        else:
+            points = np.zeros((0, self.load_dim), dtype=np.float32)
+
+        if self.max_points_total > 0 and points.shape[0] > self.max_points_total:
+            choice = np.random.choice(points.shape[0], self.max_points_total, replace=False)
+            points = points[choice]
+
+        points = points[:, self.use_dim]
+        points_class = get_points_type(self.coord_type)
+        results['points'] = points_class(points, points_dim=points.shape[-1], attribute_dims=None)
+        return results
+
+
+@TRANSFORMS.register_module()
+class LoadMapAnythingExtraFromDepth:
+    """Construct mapanything_extra views from depth + intrinsics + camera poses.
+
+    This transform is intended to run after image augmentations so that depth and
+    intrinsics are synchronized with the image-domain transform.
+    """
+
+    def __init__(self,
+                 cam_types=None,
+                 depth_key='depth_path',
+                 fallback_depth_from_image_path=True,
+                 strict=True,
+                 min_valid_depth_ratio=1e-4,
+                 depth_nonnegative_eps=-1e-6,
+                 apply_ida_to_depth=True,
+                 apply_ida_to_intrinsics=True,
+                 filter_depth_by_pcrange=False,
+                 point_cloud_range=None,
+                 rotation_atol=1e-3,
+                 rotation_rtol=1e-3):
+        self.cam_types = list(cam_types) if cam_types is not None else None
+        self.depth_key = depth_key
+        self.fallback_depth_from_image_path = bool(fallback_depth_from_image_path)
+        self.strict = bool(strict)
+        self.min_valid_depth_ratio = float(min_valid_depth_ratio)
+        self.depth_nonnegative_eps = float(depth_nonnegative_eps)
+        self.apply_ida_to_depth = bool(apply_ida_to_depth)
+        self.apply_ida_to_intrinsics = bool(apply_ida_to_intrinsics)
+        self.filter_depth_by_pcrange = bool(filter_depth_by_pcrange)
+        self.point_cloud_range = self._parse_point_cloud_range(point_cloud_range) \
+            if self.filter_depth_by_pcrange else None
+        self.rotation_atol = float(rotation_atol)
+        self.rotation_rtol = float(rotation_rtol)
+
+    def _path_keys(self, path):
+        if not isinstance(path, str) or not path:
+            return []
+        keys = set()
+        norm_path = osp.normpath(path)
+        keys.add(norm_path)
+        keys.add(osp.normpath(osp.abspath(path)))
+        try:
+            keys.add(osp.normpath(osp.relpath(path)))
+        except Exception:
+            pass
+        return list(keys)
+
+    def _register_cam_info(self, lookup, cam_name, cam_info):
+        if not isinstance(cam_info, dict):
+            return
+        image_path = cam_info.get('data_path', None)
+        for key in self._path_keys(image_path):
+            if key not in lookup:
+                lookup[key] = (cam_name, cam_info)
+
+    def _build_cam_lookup(self, results):
+        lookup = {}
+        cam_types = _resolve_cam_types(results, self.cam_types)
+
+        cams = results.get('cams', {})
+        if isinstance(cams, dict):
+            for cam_name in cam_types:
+                if cam_name in cams:
+                    self._register_cam_info(lookup, cam_name, cams[cam_name])
+            for cam_name, cam_info in cams.items():
+                self._register_cam_info(lookup, cam_name, cam_info)
+
+        cam_sweeps = results.get('cam_sweeps', {})
+        if isinstance(cam_sweeps, dict):
+            for side in ['prev', 'next']:
+                sweeps = cam_sweeps.get(side, [])
+                if not isinstance(sweeps, list):
+                    continue
+                for sweep in sweeps:
+                    if not isinstance(sweep, dict):
+                        continue
+                    for cam_name, cam_info in sweep.items():
+                        self._register_cam_info(lookup, cam_name, cam_info)
+        elif isinstance(cam_sweeps, list):
+            for sweep in cam_sweeps:
+                if not isinstance(sweep, dict):
+                    continue
+                for cam_name, cam_info in sweep.items():
+                    self._register_cam_info(lookup, cam_name, cam_info)
+        return lookup
+
+    def _depth_candidates_from_image(self, image_path):
+        if not isinstance(image_path, str) or not image_path:
+            return []
+        path = osp.normpath(image_path)
+        parent = osp.dirname(path)
+        dirname = osp.basename(parent)
+        stem, _ = osp.splitext(osp.basename(path))
+        if not stem.endswith('_depth'):
+            stem = stem + '_depth'
+        if dirname.startswith('image_'):
+            depth_dir = osp.join(osp.dirname(parent), dirname.replace('image_', 'depth_', 1))
+        else:
+            depth_dir = parent
+        return [
+            osp.join(depth_dir, stem + '.png'),
+            osp.join(depth_dir, stem + '.npy'),
+        ]
+
+    def _resolve_depth_path(self, cam_info, image_path):
+        candidates = []
+        depth_path = cam_info.get(self.depth_key, None) if isinstance(cam_info, dict) else None
+        if isinstance(depth_path, str) and depth_path:
+            candidates.append(depth_path)
+        if self.fallback_depth_from_image_path:
+            candidates.extend(self._depth_candidates_from_image(image_path))
+
+        checked = set()
+        for cand in candidates:
+            if not isinstance(cand, str) or not cand:
+                continue
+            for key in self._path_keys(cand):
+                if key in checked:
+                    continue
+                checked.add(key)
+                if osp.exists(key):
+                    return key
+        return candidates[0] if candidates else None
+
+    def _load_depth(self, depth_path):
+        if depth_path is None:
+            return None
+        if depth_path.endswith('.npy'):
+            depth = np.load(depth_path)
+        else:
+            depth_rgba = cv2.imread(depth_path, cv2.IMREAD_UNCHANGED)
+            if depth_rgba is None:
+                return None
+            depth = depth_rgba.view('<f4').squeeze()
+        if depth is None:
+            return None
+        if depth.ndim > 2:
+            depth = np.squeeze(depth)
+        if depth.ndim != 2:
+            return None
+        return depth.astype(np.float32)
+
+    @staticmethod
+    def _as_rotation_matrix(rotation):
+        rot = np.asarray(rotation)
+        if rot.shape == (3, 3):
+            return rot.astype(np.float64)
+
+        quat = np.asarray(rotation, dtype=np.float64).reshape(-1)
+        if quat.size != 4:
+            raise ValueError(f'Unsupported rotation shape: {rot.shape}')
+        norm = np.linalg.norm(quat)
+        if norm <= 0:
+            raise ValueError('Quaternion rotation has zero norm')
+        w, x, y, z = quat / norm
+        return np.array([
+            [1 - 2 * (y * y + z * z), 2 * (x * y - z * w), 2 * (x * z + y * w)],
+            [2 * (x * y + z * w), 1 - 2 * (x * x + z * z), 2 * (y * z - x * w)],
+            [2 * (x * z - y * w), 2 * (y * z + x * w), 1 - 2 * (x * x + y * y)],
+        ], dtype=np.float64)
+
+    def _validate_rotation_matrix(self, rotation, context):
+        rot = self._as_rotation_matrix(rotation)
+        if not np.all(np.isfinite(rot)):
+            raise ValueError(f'{context}: rotation contains non-finite values')
+        ortho = rot.T @ rot
+        if not np.allclose(ortho, np.eye(3), rtol=self.rotation_rtol, atol=self.rotation_atol):
+            raise ValueError(f'{context}: rotation is not orthonormal')
+        det = float(np.linalg.det(rot))
+        if (not np.isfinite(det)) or det <= 0:
+            raise ValueError(f'{context}: rotation determinant must be positive, got {det}')
+        return rot
+
+    @staticmethod
+    def _image_hw(img):
+        if isinstance(img, np.ndarray):
+            if img.ndim < 2:
+                raise ValueError(f'Unsupported image ndim={img.ndim}')
+            return int(img.shape[0]), int(img.shape[1])
+        if isinstance(img, torch.Tensor):
+            if img.dim() == 3:
+                if img.shape[0] in (1, 3):
+                    return int(img.shape[1]), int(img.shape[2])
+                return int(img.shape[0]), int(img.shape[1])
+            if img.dim() == 2:
+                return int(img.shape[0]), int(img.shape[1])
+        raise TypeError(f'Unsupported image type for shape inference: {type(img)}')
+
+    def _apply_ida_to_depth(self, depth, ida_aug_params):
+        if not self.apply_ida_to_depth:
+            return depth
+        if ida_aug_params is None:
+            return depth
+
+        resize_dims = ida_aug_params.get('resize_dims', None)
+        crop = ida_aug_params.get('crop', None)
+        flip = bool(ida_aug_params.get('flip', False))
+        rotate = float(ida_aug_params.get('rotate', 0.0))
+        if resize_dims is None or crop is None:
+            if self.strict:
+                raise KeyError('ida_aug_params must contain resize_dims and crop')
+            return depth
+
+        pil_depth = Image.fromarray(depth.astype(np.float32), mode='F')
+        pil_depth = pil_depth.resize(tuple(int(v) for v in resize_dims), resample=Image.BILINEAR)
+        pil_depth = pil_depth.crop(tuple(int(v) for v in crop))
+        if flip:
+            pil_depth = pil_depth.transpose(method=Image.FLIP_LEFT_RIGHT)
+        if abs(rotate) > 1e-6:
+            pil_depth = pil_depth.rotate(rotate, resample=Image.BILINEAR)
+        return np.array(pil_depth, dtype=np.float32)
+
+    def _apply_ida_to_intrinsics(self, intrinsics, ida_aug_params):
+        if not self.apply_ida_to_intrinsics:
+            return intrinsics
+        if ida_aug_params is None:
+            return intrinsics
+
+        ida_mat = ida_aug_params.get('ida_mat', None)
+        if ida_mat is None:
+            if self.strict:
+                raise KeyError('ida_aug_params must contain ida_mat')
+            return intrinsics
+        ida_mat = np.asarray(ida_mat, dtype=np.float64)
+        if ida_mat.shape != (4, 4):
+            raise ValueError(f'ida_aug_params["ida_mat"] must be 4x4, got {ida_mat.shape}')
+        ida_affine = ida_mat[:3, :3]
+        return (ida_affine @ intrinsics.astype(np.float64)).astype(np.float32)
+
+    def _find_cam_info(self, cam_lookup, image_path):
+        for key in self._path_keys(image_path):
+            if key in cam_lookup:
+                return cam_lookup[key][1]
+
+        if isinstance(image_path, str) and image_path:
+            basename = osp.basename(image_path)
+            matched = []
+            for key, (_, cam_info) in cam_lookup.items():
+                if isinstance(key, str) and key.endswith(basename):
+                    matched.append(cam_info)
+            if len(matched) == 1:
+                return matched[0]
+        return None
+
+    def _validate_intrinsics(self, intrinsics, context):
+        if intrinsics.shape != (3, 3):
+            raise ValueError(f'{context}: intrinsics must be 3x3, got {intrinsics.shape}')
+        if not np.all(np.isfinite(intrinsics)):
+            raise ValueError(f'{context}: intrinsics contain non-finite values')
+        if abs(float(intrinsics[0, 0])) <= 1e-6 or abs(float(intrinsics[1, 1])) <= 1e-6:
+            raise ValueError(
+                f'{context}: intrinsics fx/fy magnitude must be positive, '
+                f'got fx={intrinsics[0, 0]}, fy={intrinsics[1, 1]}')
+
+    def _validate_depth(self, depth, context):
+        if depth.ndim != 2:
+            raise ValueError(f'{context}: depth must be 2D HxW, got shape={depth.shape}')
+        if not np.all(np.isfinite(depth)):
+            raise ValueError(f'{context}: depth contains non-finite values')
+        if depth.size == 0:
+            raise ValueError(f'{context}: empty depth map')
+
+        min_depth = float(np.min(depth))
+        if min_depth < self.depth_nonnegative_eps:
+            raise ValueError(
+                f'{context}: depth has negative values (min={min_depth}, '
+                f'eps={self.depth_nonnegative_eps})')
+
+        valid_mask = depth > 0.0
+        valid_ratio = float(np.mean(valid_mask))
+        if valid_ratio < self.min_valid_depth_ratio:
+            raise ValueError(
+                f'{context}: valid depth ratio too low ({valid_ratio:.6f} < {self.min_valid_depth_ratio:.6f})')
+
+    @staticmethod
+    def _parse_point_cloud_range(point_cloud_range):
+        if point_cloud_range is None:
+            raise ValueError(
+                'point_cloud_range must be provided when filter_depth_by_pcrange=True')
+        pcr = np.asarray(point_cloud_range, dtype=np.float32).reshape(-1)
+        if pcr.size != 6:
+            raise ValueError(
+                f'point_cloud_range must contain 6 values, got shape={pcr.shape}')
+        if not np.all(np.isfinite(pcr)):
+            raise ValueError('point_cloud_range contains non-finite values')
+        if not (pcr[0] < pcr[3] and pcr[1] < pcr[4] and pcr[2] < pcr[5]):
+            raise ValueError(
+                f'point_cloud_range min/max invalid: {pcr.tolist()}')
+        return pcr
+
+    def _filter_depth_by_point_cloud_range(self, depth, intrinsics, camera_pose, context):
+        if not self.filter_depth_by_pcrange:
+            return depth
+
+        valid_depth = np.isfinite(depth) & (depth > 0.0)
+        if not np.any(valid_depth):
+            return np.zeros_like(depth, dtype=np.float32)
+
+        v, u = np.nonzero(valid_depth)
+        z = depth[v, u].astype(np.float64)
+
+        fx = float(intrinsics[0, 0])
+        fy = float(intrinsics[1, 1])
+        cx = float(intrinsics[0, 2])
+        cy = float(intrinsics[1, 2])
+        if abs(fx) <= 1e-6 or abs(fy) <= 1e-6:
+            raise ValueError(
+                f'{context}: invalid intrinsics for unprojection, fx={fx}, fy={fy}')
+
+        x = (u.astype(np.float64) - cx) * z / fx
+        y = (v.astype(np.float64) - cy) * z / fy
+        points_cam = np.stack([x, y, z], axis=1)
+
+        rot = np.asarray(camera_pose[:3, :3], dtype=np.float64)
+        trans = np.asarray(camera_pose[:3, 3], dtype=np.float64)
+        points_world = (rot @ points_cam.T).T + trans[None, :]
+
+        pcr = self.point_cloud_range
+        in_range = (
+            (points_world[:, 0] >= float(pcr[0])) & (points_world[:, 0] <= float(pcr[3])) &
+            (points_world[:, 1] >= float(pcr[1])) & (points_world[:, 1] <= float(pcr[4])) &
+            (points_world[:, 2] >= float(pcr[2])) & (points_world[:, 2] <= float(pcr[5]))
+        )
+
+        filtered = np.zeros_like(depth, dtype=np.float32)
+        if np.any(in_range):
+            keep_v = v[in_range]
+            keep_u = u[in_range]
+            filtered[keep_v, keep_u] = depth[keep_v, keep_u]
+        return filtered
+
+    def _build_camera_pose(self, cam_info, context):
+        if not isinstance(cam_info, dict):
+            raise TypeError(f'{context}: cam_info must be dict, got {type(cam_info)}')
+        rotation = cam_info.get('sensor2global_rotation', None)
+        translation = cam_info.get('sensor2global_translation', None)
+        if rotation is None or translation is None:
+            raise KeyError(f'{context}: missing sensor2global rotation/translation')
+
+        rot = self._validate_rotation_matrix(rotation, context=context)
+        trans = np.asarray(translation, dtype=np.float64).reshape(-1)
+        if trans.size != 3:
+            raise ValueError(
+                f'{context}: sensor2global_translation must have 3 values, got shape={trans.shape}')
+        if not np.all(np.isfinite(trans)):
+            raise ValueError(f'{context}: sensor2global_translation contains non-finite values')
+
+        cam2world = np.eye(4, dtype=np.float32)
+        cam2world[:3, :3] = rot.astype(np.float32)
+        cam2world[:3, 3] = trans.astype(np.float32)
+        return cam2world
+
+    def __call__(self, results):
+        filenames = results.get('filename', [])
+        imgs = results.get('img', [])
+        if not isinstance(filenames, list):
+            filenames = list(filenames)
+        if not isinstance(imgs, list):
+            imgs = list(imgs)
+        if len(filenames) != len(imgs):
+            raise ValueError(
+                f'filename/img length mismatch: len(filename)={len(filenames)} vs len(img)={len(imgs)}')
+        if len(filenames) == 0:
+            raise ValueError('Empty filename list: cannot build mapanything_extra')
+
+        cam_lookup = self._build_cam_lookup(results)
+        if self.strict and len(cam_lookup) == 0:
+            raise ValueError('No camera metadata found in results (expected cams/cam_sweeps)')
+
+        ida_aug_params = results.get('ida_aug_params', None)
+        views = []
+        for idx, (image_path, img) in enumerate(zip(filenames, imgs)):
+            context = f'view[{idx}] image={image_path}'
+            cam_info = self._find_cam_info(cam_lookup, image_path)
+            if cam_info is None:
+                raise FileNotFoundError(f'{context}: failed to match camera metadata by path')
+
+            depth_path = self._resolve_depth_path(cam_info, image_path)
+            if depth_path is None or (not osp.exists(depth_path)):
+                raise FileNotFoundError(f'{context}: depth file does not exist ({depth_path})')
+            depth = self._load_depth(depth_path)
+            if depth is None:
+                raise FileNotFoundError(f'{context}: failed to decode depth from {depth_path}')
+
+            depth = self._apply_ida_to_depth(depth, ida_aug_params)
+            target_hw = self._image_hw(img)
+            if depth.shape != target_hw:
+                raise ValueError(
+                    f'{context}: depth/image shape mismatch after augmentation, '
+                    f'depth={depth.shape}, image={target_hw}')
+            depth = np.ascontiguousarray(depth, dtype=np.float32)
+
+            intrinsics = np.asarray(cam_info.get('cam_intrinsic', None), dtype=np.float32)
+            self._validate_intrinsics(intrinsics, context=context)
+            intrinsics = self._apply_ida_to_intrinsics(intrinsics, ida_aug_params)
+            self._validate_intrinsics(intrinsics, context=context)
+
+            camera_pose = self._build_camera_pose(cam_info, context=context)
+            if not np.all(np.isfinite(camera_pose)):
+                raise ValueError(f'{context}: camera pose contains non-finite values')
+
+            depth = self._filter_depth_by_point_cloud_range(
+                depth=depth,
+                intrinsics=intrinsics,
+                camera_pose=camera_pose,
+                context=context)
+            self._validate_depth(depth, context=context)
+
+            views.append(dict(
+                depth_z=depth,
+                intrinsics=np.ascontiguousarray(intrinsics, dtype=np.float32),
+                camera_poses=np.ascontiguousarray(camera_pose, dtype=np.float32),
+                is_metric_scale=True,
+            ))
+
+        if len(views) != len(imgs):
+            raise ValueError(
+                f'mapanything_extra views length mismatch: expected {len(imgs)}, got {len(views)}')
+        results['mapanything_extra'] = dict(views=views)
         return results
 
 

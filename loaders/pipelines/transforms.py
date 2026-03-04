@@ -224,7 +224,7 @@ class RandomTransformImage:
 
     def __call__(self, results):
         resize, resize_dims, crop, flip, rotate = self.sample_augmentation()
-        
+
         ida_mat = np.eye(4, dtype=np.float32)
         for i in range(len(results['img'])):
             img = Image.fromarray(np.uint8(results['img'][i]))
@@ -248,6 +248,14 @@ class RandomTransformImage:
         results['ori_shape'] = [img.shape for img in results['img']]
         results['img_shape'] = [img.shape for img in results['img']]
         results['pad_shape'] = [img.shape for img in results['img']]
+        results['ida_aug_params'] = dict(
+            resize=float(resize),
+            resize_dims=(int(resize_dims[0]), int(resize_dims[1])),
+            crop=tuple(int(v) for v in crop),
+            flip=bool(flip),
+            rotate=float(rotate),
+            ida_mat=np.asarray(ida_mat, dtype=np.float32).copy(),
+        )
 
         return results
 

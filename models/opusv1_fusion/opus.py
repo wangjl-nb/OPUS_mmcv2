@@ -601,6 +601,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
         points = inputs.get('points') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_metas = self._collect_img_metas(data_samples)
         return self.simple_test(img_metas, img, points, rescale=rescale,
                                 mapanything_extra=mapanything_extra)
@@ -643,6 +646,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         Returns:
             dict: Losses of different branches.
         """
+        if isinstance(img, torch.Tensor) and img.dim() >= 1:
+            mapanything_extra = self._normalize_mapanything_extra(
+                mapanything_extra, batch_size=int(img.shape[0]))
         img_feats = self.extract_img_feat(
             img,
             img_metas,
@@ -725,9 +731,86 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         return torch.tensor(values)
 
     def _normalize_mapanything_extra(self, mapanything_extra, batch_size):
+        def _is_batched_leaf(value):
+            if isinstance(value, (list, tuple)) and len(value) == batch_size:
+                return True
+            if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+                return True
+            if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+                return True
+            return False
+
+        def _select_batched_leaf(value, sample_idx):
+            if isinstance(value, list):
+                return copy.deepcopy(value[sample_idx])
+            if isinstance(value, tuple):
+                return copy.deepcopy(value[sample_idx])
+            if isinstance(value, torch.Tensor):
+                return value[sample_idx]
+            if isinstance(value, np.ndarray):
+                return np.array(value[sample_idx], copy=True)
+            return copy.deepcopy(value)
+
+        def _decollate_from_dict(extra_dict):
+            if not isinstance(extra_dict, dict):
+                return None
+            if 'views' not in extra_dict:
+                return None
+            views = extra_dict.get('views', None)
+            if not isinstance(views, (list, tuple)) or len(views) == 0:
+                return None
+            views = list(views)
+            if not isinstance(views[0], dict):
+                return None
+
+            # Detect if view payloads are batched by pseudo-collate.
+            has_batched_payload = False
+            for view in views:
+                if not isinstance(view, dict):
+                    continue
+                for value in view.values():
+                    if _is_batched_leaf(value):
+                        has_batched_payload = True
+                        break
+                if has_batched_payload:
+                    break
+            if not has_batched_payload:
+                return None
+
+            decollated = [dict() for _ in range(batch_size)]
+            for key, value in extra_dict.items():
+                if key == 'views':
+                    for sample_idx in range(batch_size):
+                        sample_views = []
+                        for view in views:
+                            if not isinstance(view, dict):
+                                sample_views.append(copy.deepcopy(view))
+                                continue
+                            sample_view = {}
+                            for view_key, view_value in view.items():
+                                if _is_batched_leaf(view_value):
+                                    sample_view[view_key] = _select_batched_leaf(
+                                        view_value, sample_idx)
+                                else:
+                                    sample_view[view_key] = copy.deepcopy(view_value)
+                            sample_views.append(sample_view)
+                        decollated[sample_idx]['views'] = sample_views
+                    continue
+
+                if _is_batched_leaf(value):
+                    for sample_idx in range(batch_size):
+                        decollated[sample_idx][key] = _select_batched_leaf(value, sample_idx)
+                else:
+                    for sample_idx in range(batch_size):
+                        decollated[sample_idx][key] = copy.deepcopy(value)
+            return decollated
+
         if mapanything_extra is None:
             return None
         if isinstance(mapanything_extra, dict):
+            decollated = _decollate_from_dict(mapanything_extra)
+            if decollated is not None:
+                return decollated
             return [copy.deepcopy(mapanything_extra) for _ in range(batch_size)]
         if isinstance(mapanything_extra, tuple):
             mapanything_extra = list(mapanything_extra)

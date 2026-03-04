@@ -160,6 +160,7 @@ class TartangroundOcc3DDataset(BaseDataset):
                 img_filename=img_paths,
                 img_timestamp=img_timestamps,
                 ego2img=ego2img,
+                cams=info['cams'],
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
                 cam_types=cam_types,
                 num_views=len(cam_types),

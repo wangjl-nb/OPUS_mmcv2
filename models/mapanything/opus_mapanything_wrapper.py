@@ -5,6 +5,7 @@ import sys
 import warnings
 from contextlib import contextmanager, nullcontext
 
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -138,6 +139,10 @@ class MapAnythingOPUSEncoder(BaseModule):
         self.expect_contiguous = bool(expect_contiguous)
         self.anyup_cfg = dict(anyup_cfg or {})
         self.anyup_enabled = bool(self.anyup_cfg.get('enabled', False))
+        self.anyup_mode = str(self.anyup_cfg.get('mode', 'anyup')).lower()
+        if self.anyup_mode not in ('anyup', 'bilinear'):
+            raise ValueError(
+                f'anyup_cfg.mode must be one of ("anyup", "bilinear"), got {self.anyup_mode}')
         self.anyup_model = None
         self.anyup_freeze = True
         self.anyup_q_chunk_size = None
@@ -245,14 +250,122 @@ class MapAnythingOPUSEncoder(BaseModule):
         with _prepend_sys_path(self.repo_root):
             from mapanything.models import MapAnything, init_model_from_config
             from mapanything.utils.image import preprocess_inputs
+            from mapanything.utils.inference import preprocess_input_views_for_inference
 
         self._mapanything_cls = MapAnything
         self._init_model_from_config = init_model_from_config
         self._preprocess_inputs = preprocess_inputs
+        self._preprocess_input_views_for_inference = preprocess_input_views_for_inference
         self.map_model = self._build_model_from_cfg(self.mapanything_model_cfg)
 
         if self.strip_to_feature_mode:
             self._strip_mapanything_model(self.map_model)
+
+    @staticmethod
+    def _ensure_view_tensor(view, key, expected_shape_suffix, sample_idx, view_idx):
+        value = view.get(key, None)
+        if not isinstance(value, torch.Tensor):
+            raise ValueError(
+                f'sample={sample_idx} view={view_idx} missing tensor key "{key}", '
+                f'got type={type(value)}')
+        if value.dim() != len(expected_shape_suffix):
+            raise ValueError(
+                f'sample={sample_idx} view={view_idx} key="{key}" dim mismatch: '
+                f'expected dim={len(expected_shape_suffix)}, got shape={tuple(value.shape)}')
+        if tuple(value.shape) != tuple(expected_shape_suffix):
+            raise ValueError(
+                f'sample={sample_idx} view={view_idx} key="{key}" shape mismatch: '
+                f'expected={tuple(expected_shape_suffix)}, got={tuple(value.shape)}')
+        if not torch.isfinite(value).all():
+            raise ValueError(
+                f'sample={sample_idx} view={view_idx} key="{key}" contains non-finite values')
+        return value
+
+    def _validate_preprocessed_views_for_geometry(self, views_before, views_after, sample_idx):
+        if len(views_before) != len(views_after):
+            raise ValueError(
+                f'sample={sample_idx}: view count mismatch after preprocess_input_views_for_inference, '
+                f'before={len(views_before)}, after={len(views_after)}')
+
+        for view_idx, (before_view, after_view) in enumerate(zip(views_before, views_after)):
+            expects_ray = ('intrinsics' in before_view) or ('ray_directions' in before_view)
+            expects_depth = ('depth_z' in before_view)
+            expects_pose = ('camera_poses' in before_view)
+
+            image = after_view.get('img', None)
+            if not isinstance(image, torch.Tensor) or image.dim() != 4:
+                raise ValueError(
+                    f'sample={sample_idx} view={view_idx}: processed image must be [1,3,H,W], '
+                    f'got type={type(image)} shape={getattr(image, "shape", None)}')
+            if image.shape[0] != 1:
+                raise ValueError(
+                    f'sample={sample_idx} view={view_idx}: processed image batch dim must be 1, '
+                    f'got {tuple(image.shape)}')
+            h, w = int(image.shape[-2]), int(image.shape[-1])
+
+            if expects_ray or expects_depth:
+                self._ensure_view_tensor(
+                    after_view,
+                    key='ray_directions_cam',
+                    expected_shape_suffix=(1, h, w, 3),
+                    sample_idx=sample_idx,
+                    view_idx=view_idx)
+
+            if expects_depth:
+                self._ensure_view_tensor(
+                    after_view,
+                    key='depth_along_ray',
+                    expected_shape_suffix=(1, h, w, 1),
+                    sample_idx=sample_idx,
+                    view_idx=view_idx)
+
+            if expects_pose:
+                self._ensure_view_tensor(
+                    after_view,
+                    key='camera_pose_quats',
+                    expected_shape_suffix=(1, 4),
+                    sample_idx=sample_idx,
+                    view_idx=view_idx)
+                self._ensure_view_tensor(
+                    after_view,
+                    key='camera_pose_trans',
+                    expected_shape_suffix=(1, 3),
+                    sample_idx=sample_idx,
+                    view_idx=view_idx)
+
+    def _normalize_is_metric_scale(self, processed_views, sample_idx):
+        for view_idx, view in enumerate(processed_views):
+            if 'is_metric_scale' not in view:
+                continue
+            value = view['is_metric_scale']
+            image = view.get('img', None)
+            if not isinstance(image, torch.Tensor) or image.dim() != 4:
+                raise ValueError(
+                    f'sample={sample_idx} view={view_idx}: expected image tensor [1,3,H,W] '
+                    f'before normalizing is_metric_scale, got {type(image)} '
+                    f"shape={getattr(image, 'shape', None)}")
+            target_device = image.device
+            if isinstance(value, torch.Tensor):
+                metric = value.to(device=target_device, dtype=torch.bool)
+            elif isinstance(value, np.ndarray):
+                metric = torch.as_tensor(value, device=target_device, dtype=torch.bool)
+            elif isinstance(value, (list, tuple)):
+                metric = torch.as_tensor(value, device=target_device, dtype=torch.bool)
+            elif isinstance(value, (bool, np.bool_)):
+                metric = torch.tensor([bool(value)], device=target_device, dtype=torch.bool)
+            else:
+                raise TypeError(
+                    f'sample={sample_idx} view={view_idx}: unsupported is_metric_scale type {type(value)}')
+
+            metric = metric.reshape(-1)
+            if metric.numel() == 0:
+                raise ValueError(
+                    f'sample={sample_idx} view={view_idx}: is_metric_scale cannot be empty')
+            if metric.numel() != 1:
+                raise ValueError(
+                    f'sample={sample_idx} view={view_idx}: is_metric_scale must contain exactly one value, '
+                    f'got shape={tuple(metric.shape)}')
+            view['is_metric_scale'] = metric
 
     def _strip_mapanything_model(self, model):
         for module_name in self._STRIP_MODULES:
@@ -306,9 +419,14 @@ class MapAnythingOPUSEncoder(BaseModule):
             self.anyup_model.to(target_device)
 
     def _build_anyup_components(self):
+        self._parse_anyup_runtime_cfg()
+        if self.anyup_mode == 'bilinear':
+            self.anyup_model = None
+            return
+
         anyup_repo_root = self.anyup_cfg.get('repo_root', None)
         if not anyup_repo_root:
-            raise ValueError('anyup_cfg.repo_root must be provided when anyup_cfg.enabled=True')
+            raise ValueError('anyup_cfg.repo_root must be provided when anyup_cfg.enabled=True and mode="anyup"')
         anyup_repo_root = os.path.abspath(os.path.expanduser(anyup_repo_root))
         if not os.path.isdir(anyup_repo_root):
             raise FileNotFoundError(f'AnyUp repo_root does not exist: {anyup_repo_root}')
@@ -368,6 +486,12 @@ class MapAnythingOPUSEncoder(BaseModule):
                 f'missing={missing_keys}, unexpected={unexpected_keys}',
                 stacklevel=2)
 
+        self.anyup_model.eval()
+        if self.anyup_freeze:
+            for parameter in self.anyup_model.parameters():
+                parameter.requires_grad = False
+
+    def _parse_anyup_runtime_cfg(self):
         self.anyup_freeze = bool(self.anyup_cfg.get('freeze', True))
         self.anyup_q_chunk_size = self.anyup_cfg.get('q_chunk_size', None)
         if self.anyup_q_chunk_size is not None:
@@ -430,11 +554,6 @@ class MapAnythingOPUSEncoder(BaseModule):
                 'anyup_cfg.upsample_output_divisor must be positive, '
                 f'got {self.anyup_upsample_output_divisor}')
 
-        self.anyup_model.eval()
-        if self.anyup_freeze:
-            for parameter in self.anyup_model.parameters():
-                parameter.requires_grad = False
-
     def _downsample_anyup_feature(self, feat_2d, target_hw):
         if feat_2d.shape[-2:] == target_hw:
             return feat_2d
@@ -491,6 +610,16 @@ class MapAnythingOPUSEncoder(BaseModule):
         return out_h, out_w
 
     def _run_anyup_model(self, hr_image, lr_feat, output_size):
+        if self.anyup_mode == 'bilinear':
+            if not isinstance(lr_feat, torch.Tensor) or lr_feat.dim() != 4:
+                raise ValueError(
+                    'Bilinear AnyUp fallback expects lr_feat Tensor[N, C, H, W], '
+                    f'got type={type(lr_feat)} shape={getattr(lr_feat, "shape", None)}')
+            return F.interpolate(
+                lr_feat,
+                size=output_size,
+                mode='bilinear',
+                align_corners=self.anyup_pyramid_align_corners)
         if self.anyup_model is None:
             raise RuntimeError('AnyUp model is not initialized')
         if self.anyup_freeze:
@@ -705,6 +834,15 @@ class MapAnythingOPUSEncoder(BaseModule):
             processed_views = self._preprocess_inputs(
                 sample_views,
                 **self.mapanything_preprocess_cfg)
+            processed_views_before_inference = [dict(v) for v in processed_views]
+            processed_views = self._preprocess_input_views_for_inference(processed_views)
+            self._normalize_is_metric_scale(
+                processed_views,
+                sample_idx=sample_idx)
+            self._validate_preprocessed_views_for_geometry(
+                processed_views_before_inference,
+                processed_views,
+                sample_idx=sample_idx)
             processed_views = self._move_processed_views_to_model_device(processed_views)
             raw_output = self._run_model(processed_views)
 

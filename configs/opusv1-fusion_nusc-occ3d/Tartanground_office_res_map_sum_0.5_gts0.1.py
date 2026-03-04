@@ -3,7 +3,7 @@ custom_imports = dict(imports=['models', 'loaders'], allow_failed_imports=False)
 
 dataset_type = 'TartangroundOcc3DDataset'
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_0.1/'
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'
 
 input_modality = dict(
     use_lidar=True,
@@ -50,7 +50,7 @@ cls_weights = [
 # cloud range accordingly
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]   # 400 * 400 *160 voxels with 0.05m resolution
 pc_voxel_size = [0.05, 0.05, 0.05]
-voxel_size = [0.1, 0.1, 0.1]
+voxel_size = [0.05, 0.05, 0.05]
 
 dataset_cfg = dict(
     cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],
@@ -84,7 +84,7 @@ dataset_cfg = dict(
 # - num_refines: points-per-query schedule across decoder layers.
 embed_dims = 256
 num_layers = 6
-num_query = 4800  # Main occupancy query budget.
+num_query = 9600  # Main occupancy query budget.
 num_frames = 9  # 1 current + 8 history sweeps.
 num_levels = 4
 num_points = 4
@@ -122,7 +122,7 @@ img_encoder = dict(
     type='MapAnythingOccEncoder',
     repo_root='/root/wjl/OPUS_mmcv2/third_party/map-anything',
     freeze=True,
-    freeze_via_wrapper=True,
+    freeze_via_wrapper=False,  # If True, the wrapper is frozen instead of the model; allows partial finetuning if wrapper is designed for it.
     num_views=dataset_cfg['num_views'],
     num_frames=9,
     chunk_by_frame=True,
@@ -134,7 +134,7 @@ img_encoder = dict(
         variant='anyup_multi_backbone',
         checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',
         allow_online_download_if_missing=True,
-        q_chunk_size=256,
+        q_chunk_size=64,
         view_batch_size=dataset_cfg['num_views'],
         output_in_channels=1024,
         output_channels=256,
@@ -317,11 +317,18 @@ train_pipeline = [
     # dict(type='ObjectRangeFilter', point_cloud_range=point_cloud_range),
     # dict(type='ObjectNameFilter', classes=object_names),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),
+    dict(
+        type='LoadMapAnythingExtraFromDepth',
+        strict=True,
+        filter_depth_by_pcrange=True,
+        point_cloud_range=point_cloud_range,
+        min_valid_depth_ratio=1e-6),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PackOcc3DInputs', meta_keys=(
         'sample_idx', 'sample_token', 'scene_name',
         'filename', 'ori_shape', 'img_shape', 'pad_shape',
-        'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
+        'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'),
+        extra_input_keys=('mapanything_extra',))
 ]
 
 test_pipeline = [
@@ -332,14 +339,21 @@ test_pipeline = [
          pad_empty_sweeps=True, remove_close=True),
     dict(type='LiDARToOccSpace'),
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),
+    dict(
+        type='LoadMapAnythingExtraFromDepth',
+        strict=True,
+        filter_depth_by_pcrange=True,
+        point_cloud_range=point_cloud_range,
+        min_valid_depth_ratio=1e-6),
     dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),
     dict(type='PackOcc3DInputs', meta_keys=(
         'sample_idx', 'sample_token', 'scene_name',
         'filename', 'ori_shape', 'img_shape', 'pad_shape',
-        'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'))
+        'ego2occ', 'ego2img', 'ego2lidar', 'img_timestamp'),
+        extra_input_keys=('mapanything_extra',))
 ]
 
-batch_size = 32
+batch_size = 16
 
 train_dataloader = dict(
     batch_size=batch_size,
