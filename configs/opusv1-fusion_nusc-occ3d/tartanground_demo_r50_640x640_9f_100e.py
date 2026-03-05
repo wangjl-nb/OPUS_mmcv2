@@ -19,7 +19,7 @@ test_ann_file = f'{dataset_root}test{ann_pkl_suffix}.pkl'
 
 # Evaluation / training schedule knobs
 eval_score_thr = 0.3
-val_interval = 5
+val_interval = 10
 
 input_modality = dict(
     use_lidar=True,
@@ -501,7 +501,7 @@ default_hooks = dict(
     timer=dict(type='IterTimerHook'),
     logger=dict(type='LoggerHook', interval=1),
     param_scheduler=dict(type='ParamSchedulerHook'),
-    checkpoint=dict(type='CheckpointHook', interval=5, max_keep_ckpts=3, save_last=True),
+    checkpoint=dict(type='CheckpointHook', interval=10, max_keep_ckpts=5, save_last=True),
     sampler_seed=dict(type='DistSamplerSeedHook'),
 )
 

@@ -48,7 +48,7 @@ param_scheduler = [
         end=total_epochs,
         eta_min=2e-4 * 1e-3),
 ]
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=5)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=10)
 
 model = dict(
     img_encoder=dict(

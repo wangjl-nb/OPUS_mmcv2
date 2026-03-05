@@ -48,7 +48,9 @@ def main():
         if isinstance(loader_cfg, dict) and 'batch_size' in loader_cfg:
             loader_cfg['batch_size'] = max(1, loader_cfg['batch_size'] // world_size)
 
-    timestamp = time.strftime('%Y-%m-%d/%H-%M-%S', time.localtime(time.time()))
+    run_timestamp = os.environ.get('OPUS_RUN_TIMESTAMP')
+    if not run_timestamp:
+        run_timestamp = time.strftime('%Y-%m-%d/%H-%M-%S', time.localtime())
 
     resume_from = cfg.get('resume_from', None)
     if resume_from:
@@ -59,7 +61,7 @@ def main():
         cfg.resume = True
     else:
         run_name = osp.splitext(osp.split(args.config)[-1])[0]
-        run_name = f'{run_name}_{time.strftime("%Y-%m-%d/%H-%M-%S", time.localtime(time.time()))}'
+        run_name = f'{run_name}_{run_timestamp}'
         cfg.work_dir = osp.join('outputs', cfg.model['type'], run_name)
         cfg.resume = False
 
