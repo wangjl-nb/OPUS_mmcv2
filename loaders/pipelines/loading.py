@@ -1306,7 +1306,30 @@ class LoadMapAnythingExtraFromDepth:
                 f'point_cloud_range min/max invalid: {pcr.tolist()}')
         return pcr
 
-    def _filter_depth_by_point_cloud_range(self, depth, intrinsics, camera_pose, context):
+    def _build_camera_to_lidar(self, cam_info, context):
+        if not isinstance(cam_info, dict):
+            raise TypeError(f'{context}: cam_info must be dict, got {type(cam_info)}')
+        rotation = cam_info.get('sensor2lidar_rotation', None)
+        translation = cam_info.get('sensor2lidar_translation', None)
+        if rotation is None or translation is None:
+            raise KeyError(
+                f'{context}: missing sensor2lidar rotation/translation required by '
+                'filter_depth_by_pcrange; local point_cloud_range filtering needs local-frame pose')
+
+        rot = self._validate_rotation_matrix(rotation, context=f'{context}:sensor2lidar')
+        trans = np.asarray(translation, dtype=np.float64).reshape(-1)
+        if trans.size != 3:
+            raise ValueError(
+                f'{context}: sensor2lidar_translation must have 3 values, got shape={trans.shape}')
+        if not np.all(np.isfinite(trans)):
+            raise ValueError(f'{context}: sensor2lidar_translation contains non-finite values')
+
+        cam2lidar = np.eye(4, dtype=np.float32)
+        cam2lidar[:3, :3] = rot.astype(np.float32)
+        cam2lidar[:3, 3] = trans.astype(np.float32)
+        return cam2lidar
+
+    def _filter_depth_by_point_cloud_range(self, depth, intrinsics, cam_info, context):
         if not self.filter_depth_by_pcrange:
             return depth
 
@@ -1329,15 +1352,18 @@ class LoadMapAnythingExtraFromDepth:
         y = (v.astype(np.float64) - cy) * z / fy
         points_cam = np.stack([x, y, z], axis=1)
 
-        rot = np.asarray(camera_pose[:3, :3], dtype=np.float64)
-        trans = np.asarray(camera_pose[:3, 3], dtype=np.float64)
-        points_world = (rot @ points_cam.T).T + trans[None, :]
+        # point_cloud_range is defined in local LiDAR/occ coordinates in this codebase.
+        # Use camera->lidar transform for filtering to avoid world/local frame mismatch.
+        cam2lidar = self._build_camera_to_lidar(cam_info, context=context)
+        rot = np.asarray(cam2lidar[:3, :3], dtype=np.float64)
+        trans = np.asarray(cam2lidar[:3, 3], dtype=np.float64)
+        points_local = (rot @ points_cam.T).T + trans[None, :]
 
         pcr = self.point_cloud_range
         in_range = (
-            (points_world[:, 0] >= float(pcr[0])) & (points_world[:, 0] <= float(pcr[3])) &
-            (points_world[:, 1] >= float(pcr[1])) & (points_world[:, 1] <= float(pcr[4])) &
-            (points_world[:, 2] >= float(pcr[2])) & (points_world[:, 2] <= float(pcr[5]))
+            (points_local[:, 0] >= float(pcr[0])) & (points_local[:, 0] <= float(pcr[3])) &
+            (points_local[:, 1] >= float(pcr[1])) & (points_local[:, 1] <= float(pcr[4])) &
+            (points_local[:, 2] >= float(pcr[2])) & (points_local[:, 2] <= float(pcr[5]))
         )
 
         filtered = np.zeros_like(depth, dtype=np.float32)
@@ -1420,7 +1446,7 @@ class LoadMapAnythingExtraFromDepth:
             depth = self._filter_depth_by_point_cloud_range(
                 depth=depth,
                 intrinsics=intrinsics,
-                camera_pose=camera_pose,
+                cam_info=cam_info,
                 context=context)
             self._validate_depth(depth, context=context)
 

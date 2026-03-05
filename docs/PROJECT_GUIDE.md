@@ -57,7 +57,7 @@ conda activate opus-mmcv2
   - Sampling: `models/opusv1_fusion/opus_sampling.py` (`sampling_tpv_feats`)
   - Routing: `models/opusv1_fusion/opus.py` / `models/opusv1_fusion/opus_head.py` / `models/opusv1_fusion/opus_transformer.py`
 - Config entry:
-  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_tpv_lite_depth.py`
+  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_tpv_lite_depth_gt.py`
   - Key switches:
     - `model.enable_tpv_feature_branch=True`
     - `model.enable_pts_feature_branch=False`
@@ -342,9 +342,9 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 - 含义：LiDAR points 仍可用于 `init_pos_lidar` 初始化 query，但进入 head 的 `pts_feats` 被置零。
 - 优点：对比更干净（只消融 LiDAR feature contribution，不破坏 query 初始化路径）。
 - 实现注意：置零要用“保留计算图”的方式（如 `pts_feats * 0.0`），不要直接 `torch.zeros_like` 覆盖，否则 DDP 可能报 unused-parameter/reduction 错误。
-- 常用配置：
-  - 仅去 LiDAR 特征（保留 LiDAR 初始化）：`configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_ablation_drop_lidar_feat.py`
-  - 同时去 LiDAR 初始化 + LiDAR 特征：`configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_ablation_drop_lidar_feat_no_lidar_init.py`
+- 常用配置（当前分支未单独保留 ablation 配置文件，建议基于主配置开关）：
+  - 仅去 LiDAR 特征（保留 LiDAR 初始化）：基于 `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e.py`，设置 `model.drop_lidar_feat=True`
+  - 同时去 LiDAR 初始化 + LiDAR 特征：在上一项基础上，同时关闭 LiDAR 初始化相关开关
 
 ---
 

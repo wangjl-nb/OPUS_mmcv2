@@ -2,6 +2,7 @@ import copy
 import importlib
 import os
 import sys
+import time
 import warnings
 from contextlib import contextmanager, nullcontext
 
@@ -79,6 +80,55 @@ def _patch_torch_hub_offline_for_dinov2(dinov2_repo_dir):
         yield
     finally:
         torch.hub.load = original_torch_hub_load
+
+
+def _is_dist_initialized():
+    return torch.distributed.is_available() and torch.distributed.is_initialized()
+
+
+def _dist_rank():
+    if _is_dist_initialized():
+        return torch.distributed.get_rank()
+    return 0
+
+
+@contextmanager
+def _file_lock(lock_path, timeout_sec=600.0, poll_sec=0.2):
+    start = time.time()
+    fd = None
+    while True:
+        try:
+            fd = os.open(lock_path, os.O_CREAT | os.O_EXCL | os.O_RDWR)
+            os.write(fd, f'pid={os.getpid()}\n'.encode('utf-8'))
+            break
+        except FileExistsError:
+            if time.time() - start > timeout_sec:
+                raise TimeoutError(f'Timeout while waiting for lock file: {lock_path}')
+            time.sleep(poll_sec)
+    try:
+        yield
+    finally:
+        try:
+            if fd is not None:
+                os.close(fd)
+        finally:
+            try:
+                os.remove(lock_path)
+            except FileNotFoundError:
+                pass
+
+
+def _download_url_to_file_atomic(url, dst, progress=True):
+    tmp_path = f'{dst}.tmp.{os.getpid()}.{int(time.time() * 1e6)}'
+    try:
+        torch.hub.download_url_to_file(url, tmp_path, progress=progress)
+        os.replace(tmp_path, dst)
+    finally:
+        if os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
 
 
 @MODELS.register_module()
@@ -191,7 +241,7 @@ class MapAnythingOPUSEncoder(BaseModule):
     def _build_model_from_cfg(self, mapanything_model_cfg):
         cfg = copy.deepcopy(mapanything_model_cfg)
         load_type = cfg.pop('load_type', 'from_pretrained')
-        force_local_torch_hub = bool(cfg.pop('force_local_torch_hub', True))
+        force_local_torch_hub = bool(cfg.pop('force_local_torch_hub', False))
         local_dinov2_repo = cfg.pop('local_dinov2_repo', None)
 
         if load_type == 'from_pretrained':
@@ -446,6 +496,7 @@ class MapAnythingOPUSEncoder(BaseModule):
         checkpoint_path = os.path.abspath(os.path.expanduser(checkpoint_path))
         allow_online_download = bool(
             self.anyup_cfg.get('allow_online_download_if_missing', False))
+        rank = _dist_rank()
 
         if not os.path.isfile(checkpoint_path):
             if not allow_online_download:
@@ -456,10 +507,19 @@ class MapAnythingOPUSEncoder(BaseModule):
             if checkpoint_url is None:
                 raise ValueError(f'No checkpoint URL configured for AnyUp variant={variant}')
             os.makedirs(os.path.dirname(checkpoint_path), exist_ok=True)
-            torch.hub.download_url_to_file(
-                checkpoint_url,
-                checkpoint_path,
-                progress=True)
+            lock_path = f'{checkpoint_path}.download.lock'
+            if rank == 0:
+                with _file_lock(lock_path):
+                    if not os.path.isfile(checkpoint_path):
+                        _download_url_to_file_atomic(
+                            checkpoint_url,
+                            checkpoint_path,
+                            progress=True)
+            if _is_dist_initialized():
+                torch.distributed.barrier()
+            if not os.path.isfile(checkpoint_path):
+                raise FileNotFoundError(
+                    f'AnyUp checkpoint download did not produce file: {checkpoint_path}')
 
         with _prepend_sys_path(anyup_repo_root):
             from anyup.model import AnyUp
@@ -474,7 +534,10 @@ class MapAnythingOPUSEncoder(BaseModule):
                     use_params_from=self.anyup_model.cross_decode,
                 )
 
-        state_dict = torch.load(checkpoint_path, map_location='cpu')
+        try:
+            state_dict = torch.load(checkpoint_path, map_location='cpu', weights_only=True)
+        except TypeError:
+            state_dict = torch.load(checkpoint_path, map_location='cpu')
         if isinstance(state_dict, dict) and 'state_dict' in state_dict and isinstance(state_dict['state_dict'], dict):
             state_dict = state_dict['state_dict']
         incompatible = self.anyup_model.load_state_dict(state_dict, strict=False)

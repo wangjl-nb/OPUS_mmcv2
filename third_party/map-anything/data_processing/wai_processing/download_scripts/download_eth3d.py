@@ -15,13 +15,9 @@ import requests
 from tqdm import tqdm
 from urllib3.exceptions import InsecureRequestWarning
 
-# Suppress SSL warnings for insecure download (matching wget --no-check-certificate)
-requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
-
-
-def download_file(url, filepath):
+def download_file(url, filepath, verify=True):
     """Download a file with a progress bar."""
-    response = requests.get(url, stream=True, verify=False)
+    response = requests.get(url, stream=True, verify=verify, timeout=60)
     response.raise_for_status()
 
     total_size = int(response.headers.get("content-length", 0))
@@ -44,10 +40,19 @@ def download_file(url, filepath):
 def main():
     parser = argparse.ArgumentParser(description="Download ETH3D dataset")
     parser.add_argument("target", type=str, help="Target directory for download")
+    parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Disable TLS certificate verification (not recommended).",
+    )
     args = parser.parse_args()
 
     target = args.target
     os.makedirs(target, exist_ok=True)
+    verify_tls = not args.insecure
+    if args.insecure:
+        print("[WARN] TLS certificate verification is disabled (--insecure).")
+        requests.packages.urllib3.disable_warnings(category=InsecureRequestWarning)
 
     categories = [
         "courtyard",
@@ -77,7 +82,7 @@ def main():
 
             # Download file with progress bar
             try:
-                download_file(url, filepath)
+                download_file(url, filepath, verify=verify_tls)
             except requests.exceptions.RequestException as e:
                 print(f"Failed to download {filename}: {e}")
                 continue

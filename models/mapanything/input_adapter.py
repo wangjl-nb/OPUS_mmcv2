@@ -157,14 +157,26 @@ class OPUSToMapAnythingInputAdapter:
         return isinstance(value, (list, tuple)) and len(value) == batch_size and batch_size > 0
 
     @staticmethod
-    def _select_batched_value(value, batch_idx, batch_size):
-        if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+    def _select_batched_value(key, value, batch_idx, batch_size):
+        # Preserve per-view geometry matrices regardless of batch size.
+        if key in {'intrinsics', 'camera_poses', 'camera_pose_quats', 'camera_pose_trans'}:
+            return copy.deepcopy(value)
+
+        if key == 'is_metric_scale':
+            if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+                return value[batch_idx]
+            if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+                return np.array(value[batch_idx], copy=True)
+
+        # For generic tensors/arrays, only treat ndim>=3 as batched payload.
+        # This avoids accidental slicing of per-view 2D matrices like 3x3 / 4x4.
+        if isinstance(value, torch.Tensor) and value.dim() >= 3 and value.shape[0] == batch_size:
             return value[batch_idx]
-        if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+        if isinstance(value, np.ndarray) and value.ndim >= 3 and value.shape[0] == batch_size:
             return np.array(value[batch_idx], copy=True)
         if OPUSToMapAnythingInputAdapter._is_batched_sequence(value, batch_size):
             first = value[0]
-            if isinstance(first, (dict, list, tuple, np.ndarray, torch.Tensor)):
+            if isinstance(first, (dict, list, tuple, np.ndarray, torch.Tensor, bool, np.bool_)):
                 return copy.deepcopy(value[batch_idx])
         if isinstance(value, (list, tuple)) and len(value) == 1:
             return copy.deepcopy(value[0])
@@ -185,7 +197,7 @@ class OPUSToMapAnythingInputAdapter:
                 normalized_extra[key] = copy.deepcopy(value[batch_idx])
                 continue
             normalized_extra[key] = self._select_batched_value(
-                value, batch_idx=batch_idx, batch_size=batch_size)
+                key, value, batch_idx=batch_idx, batch_size=batch_size)
         merged.update(normalized_extra)
         return merged
 

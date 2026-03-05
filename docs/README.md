@@ -101,7 +101,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td>Link</td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occ3d/opusv2-t_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V2-T</a></td>
+        <td>OPUS-V2-T</td>
         <td>100</td>
         <td>600</td>
         <td>128</td>
@@ -114,7 +114,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occ3d/opusv2-s_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V2-S</a></td>
+        <td>OPUS-V2-S</td>
         <td>100</td>
         <td>1200</td>
         <td>64</td>
@@ -127,7 +127,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occ3d/opusv2-m_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V2-M</a></td>
+        <td>OPUS-V2-M</td>
         <td>100</td>
         <td>2400</td>
         <td>32</td>
@@ -140,7 +140,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occ3d/opusv2-l_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V2-L</a></td>
+        <td>OPUS-V2-L</td>
         <td>100</td>
         <td>4800</td>
         <td>16</td>
@@ -182,7 +182,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td>Link</td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occupancy/opusv2-t_r50_704x256_8f_nusc-occupancy_50e.py">OPUS-V2-T</a></td>
+        <td>OPUS-V2-T</td>
         <td>27.4</td>
         <td>16.4</td>
         <td>17.5</td>
@@ -205,7 +205,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occupancy/opusv2-s_r50_704x256_8f_nusc-occupancy_50e.py">OPUS-V2-S</a></td>
+        <td>OPUS-V2-S</td>
         <td>27.6</td>
         <td>16.7</td>
         <td>17.0</td>
@@ -228,7 +228,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occupancy/opusv2-m_r50_704x256_8f_nusc-occupancy_50e.py">OPUS-V2-M</a></td>
+        <td>OPUS-V2-M</td>
         <td>27.9</td>
         <td>17.4</td>
         <td>18.5</td>
@@ -251,7 +251,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv2_nusc-occupancy/opusv2-l_r50_704x256_8f_nusc-occupancy_50e.py">OPUS-V2-L</a></td>
+        <td>OPUS-V2-L</td>
         <td>28.7</td>
         <td>18.1</td>
         <td>19.3</td>
@@ -293,7 +293,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td>Link</td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv1-fusion_nusc-occ3d/opusv1-fusion-t_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V1-Fus-T</a></td>
+        <td>OPUS-V1-Fus-T</td>
         <td>100</td>
         <td>600</td>
         <td>128</td>
@@ -306,7 +306,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv1-fusion_nusc-occ3d/opusv1-fusion-s_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V1-Fus-S</a></td>
+        <td>OPUS-V1-Fus-S</td>
         <td>100</td>
         <td>1200</td>
         <td>64</td>
@@ -319,7 +319,7 @@ https://github.com/user-attachments/assets/f75b54db-a05e-4316-9ba8-9a7e5dbbbf3f
         <td><a href="https://huggingface.co/jbwang1997/OPUS">Model</a></td>
     </tr>
     <tr>
-        <td><a href="../configs/opusv1-fusion_nusc-occ3d/opusv1-fusion-m_r50_704x256_8f_nusc-occ3d_100e.py">OPUS-V1-Fus-M</a></td>
+        <td>OPUS-V1-Fus-M</td>
         <td>100</td>
         <td>2400</td>
         <td>32</td>

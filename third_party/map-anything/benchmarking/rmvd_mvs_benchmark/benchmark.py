@@ -13,6 +13,7 @@ Usage:
     python train.py [hydra_options]
 """
 
+import ast
 import json
 import logging
 import os
@@ -31,6 +32,24 @@ from mapanything.models import init_model
 from mapanything.utils.misc import StreamToLogger
 
 log = logging.getLogger(__name__)
+
+
+def _parse_resolution_wh(raw_value):
+    """Parse "(W,H)" style config safely without eval."""
+    try:
+        parsed = ast.literal_eval(str(raw_value))
+    except (ValueError, SyntaxError) as exc:
+        raise ValueError(
+            f'Invalid evaluation_resolution={raw_value!r}; expected tuple/list like (640,480)') from exc
+    if not isinstance(parsed, (list, tuple)) or len(parsed) != 2:
+        raise ValueError(
+            f'Invalid evaluation_resolution={raw_value!r}; expected 2-element tuple/list (W,H)')
+    width = int(parsed[0])
+    height = int(parsed[1])
+    if width <= 0 or height <= 0:
+        raise ValueError(
+            f'evaluation_resolution must be positive, got (W={width}, H={height})')
+    return width, height
 
 
 @torch.inference_mode()
@@ -53,7 +72,7 @@ def run_benchmark(args):
     cudnn.benchmark = not args.disable_cudnn_benchmark
 
     # Initialize RMVD test dataset
-    inference_resolution_wh = eval(args.evaluation_resolution)
+    inference_resolution_wh = _parse_resolution_wh(args.evaluation_resolution)
 
     root_dir = os.path.join(
         args.external_benchmark_data_root_data_dir, args.eval_dataset

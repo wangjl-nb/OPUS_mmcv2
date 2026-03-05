@@ -48,7 +48,7 @@ param_scheduler = [
         end=total_epochs,
         eta_min=2e-4 * 1e-3),
 ]
-train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_interval=10)
+train_cfg = dict(type='EpochBasedTrainLoop', max_epochs=total_epochs, val_val=10)
 
 model = dict(
     img_encoder=dict(
@@ -58,7 +58,7 @@ model = dict(
             repo_root='/root/wjl/OPUS_mmcv2/third_party/anyup',
             variant='anyup_multi_backbone',
             checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',
-            allow_online_download_if_missing=True,
+            allow_online_download_if_missing=False,
             q_chunk_size=64,
             view_batch_size=6,
             output_in_channels=1024,

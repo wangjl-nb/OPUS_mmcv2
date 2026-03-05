@@ -818,16 +818,25 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         return torch.tensor(values)
 
     def _normalize_mapanything_extra(self, mapanything_extra, batch_size):
-        def _is_batched_leaf(value):
+        def _is_batched_leaf(key, value):
+            if key in {'intrinsics', 'camera_poses', 'camera_pose_quats', 'camera_pose_trans'}:
+                return False
             if isinstance(value, (list, tuple)) and len(value) == batch_size:
                 return True
-            if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+            if key == 'is_metric_scale':
+                if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == batch_size:
+                    return True
+                if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+                    return True
+            if isinstance(value, torch.Tensor) and value.dim() >= 3 and value.shape[0] == batch_size:
                 return True
-            if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == batch_size:
+            if isinstance(value, np.ndarray) and value.ndim >= 3 and value.shape[0] == batch_size:
                 return True
             return False
 
-        def _select_batched_leaf(value, sample_idx):
+        def _select_batched_leaf(key, value, sample_idx):
+            if key in {'intrinsics', 'camera_poses', 'camera_pose_quats', 'camera_pose_trans'}:
+                return copy.deepcopy(value)
             if isinstance(value, list):
                 return copy.deepcopy(value[sample_idx])
             if isinstance(value, tuple):
@@ -854,8 +863,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             for view in views:
                 if not isinstance(view, dict):
                     continue
-                for value in view.values():
-                    if _is_batched_leaf(value):
+                for view_key, value in view.items():
+                    if _is_batched_leaf(view_key, value):
                         has_batched_payload = True
                         break
                 if has_batched_payload:
@@ -874,18 +883,18 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                                 continue
                             sample_view = {}
                             for view_key, view_value in view.items():
-                                if _is_batched_leaf(view_value):
+                                if _is_batched_leaf(view_key, view_value):
                                     sample_view[view_key] = _select_batched_leaf(
-                                        view_value, sample_idx)
+                                        view_key, view_value, sample_idx)
                                 else:
                                     sample_view[view_key] = copy.deepcopy(view_value)
                             sample_views.append(sample_view)
                         decollated[sample_idx]['views'] = sample_views
                     continue
 
-                if _is_batched_leaf(value):
+                if _is_batched_leaf(key, value):
                     for sample_idx in range(batch_size):
-                        decollated[sample_idx][key] = _select_batched_leaf(value, sample_idx)
+                        decollated[sample_idx][key] = _select_batched_leaf(key, value, sample_idx)
                 else:
                     for sample_idx in range(batch_size):
                         decollated[sample_idx][key] = copy.deepcopy(value)
