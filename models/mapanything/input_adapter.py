@@ -157,9 +157,48 @@ class OPUSToMapAnythingInputAdapter:
         return isinstance(value, (list, tuple)) and len(value) == batch_size and batch_size > 0
 
     @staticmethod
+    def _value_shape(value):
+        if isinstance(value, torch.Tensor):
+            return tuple(int(v) for v in value.shape)
+        if isinstance(value, np.ndarray):
+            return tuple(int(v) for v in value.shape)
+        try:
+            arr = np.asarray(value)
+            return tuple(int(v) for v in arr.shape)
+        except Exception:
+            return None
+
+    @staticmethod
+    def _is_batched_geom_sequence(value, batch_size, expected_shapes):
+        if not OPUSToMapAnythingInputAdapter._is_batched_sequence(value, batch_size):
+            return False
+        if len(value) == 0:
+            return False
+        first_shape = OPUSToMapAnythingInputAdapter._value_shape(value[0])
+        return first_shape in expected_shapes
+
+    @staticmethod
     def _select_batched_value(key, value, batch_idx, batch_size):
-        # Preserve per-view geometry matrices regardless of batch size.
+        # Geometry entries can appear either per-view (single matrix/vector)
+        # or pseudo-collated as per-batch sequences/tensors; handle both.
         if key in {'intrinsics', 'camera_poses', 'camera_pose_quats', 'camera_pose_trans'}:
+            expected_shapes = {
+                'intrinsics': {(3, 3)},
+                'camera_poses': {(4, 4)},
+                'camera_pose_quats': {(4,)},
+                'camera_pose_trans': {(3,)},
+            }[key]
+            if isinstance(value, torch.Tensor) and value.dim() >= 1 and value.shape[0] == batch_size:
+                tail_shape = tuple(int(v) for v in value.shape[1:])
+                if tail_shape in expected_shapes:
+                    return value[batch_idx]
+            if isinstance(value, np.ndarray) and value.ndim >= 1 and value.shape[0] == batch_size:
+                tail_shape = tuple(int(v) for v in value.shape[1:])
+                if tail_shape in expected_shapes:
+                    return np.array(value[batch_idx], copy=True)
+            if OPUSToMapAnythingInputAdapter._is_batched_geom_sequence(
+                    value, batch_size=batch_size, expected_shapes=expected_shapes):
+                return copy.deepcopy(value[batch_idx])
             return copy.deepcopy(value)
 
         if key == 'is_metric_scale':
