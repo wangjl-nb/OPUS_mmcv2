@@ -16,10 +16,10 @@ occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'  # Root for occupa
 point_input_source = 'lidar'  # Use raw LiDAR points for the point branch.
 eval_score_thr = 0.3  # Inference score threshold for occupancy query filtering.
 val_interval = 10  # Run validation every N epochs.
-total_epochs = 150  # Train for 150 epochs.
+total_epochs = 100  # Train for 100 epochs.
 
-# Use GT-depth split files (depth_gt setting).
-ann_pkl_suffix = '_with_depth'  # train_with_depth.pkl / val_with_depth.pkl / test_with_depth.pkl
+# Align with the reference branch split files.
+ann_pkl_suffix = ''  # train.pkl / val.pkl / test.pkl
 train_ann_file = f'{dataset_root}train{ann_pkl_suffix}.pkl'  # Training annotation pkl.
 val_ann_file = f'{dataset_root}val{ann_pkl_suffix}.pkl'  # Validation annotation pkl.
 test_ann_file = f'{dataset_root}test{ann_pkl_suffix}.pkl'  # Test annotation pkl.
@@ -162,11 +162,11 @@ img_encoder = dict(
     mapanything_model_cfg=mapanything_model_cfg,  # MapAnything model loading config.
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,  # MapAnything preprocess config.
     anyup_cfg=dict(
-        enabled=False,  # AnyUp is disabled in this experiment.
+        enabled=True,  # Align with reference branch: AnyUp enabled.
         repo_root='/root/wjl/OPUS_mmcv2/third_party/anyup',  # AnyUp local source root.
         variant='anyup_multi_backbone',  # AnyUp model variant.
         checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',  # AnyUp checkpoint path.
-        allow_online_download_if_missing=False,  # Disallow online fallback download by default.
+        allow_online_download_if_missing=True,  # Keep the same fallback behavior as reference run.
         q_chunk_size=64,  # Query chunk size for AnyUp runtime.
         view_batch_size=6,  # Per-step view batch size.
         output_in_channels=1024,  # Input channels expected by AnyUp output head.
@@ -259,22 +259,15 @@ model = dict(
     type='OPUSV1Fusion',  # Main occupancy model.
     data_preprocessor=dict(type='BaseDataPreprocessor'),  # Default preprocessor.
     use_grid_mask=False,  # Disable grid mask augmentation.
-    data_aug=dict(
-        img_color_aug=True,  # Keep image color aug on GPU path.
-        img_norm_cfg=img_norm_cfg,  # Image normalization config.
-        img_pad_cfg=dict(size_divisor=14),  # Pad to transformer patch divisor.
-    ),
+    data_aug=None,  # Align with reference branch.
     stop_prev_grad=0,  # Temporal gradient stop strategy.
-
-    # Branch switches (TPV on, pure point-only branch off).
-    enable_tpv_feature_branch=False,
-    enable_pts_feature_branch=True,
+    use_external_img_encoder=True,  # Use external MapAnything encoder path.
 
     # Image stack.
-    img_backbone=img_backbone,
-    img_neck=img_neck,
+    img_backbone=None,
+    img_neck=None,
     img_encoder=img_encoder,
-    img_feature_fusion=img_feature_fusion,
+    img_feature_fusion=None,
 
     # Point stack.
     pts_voxel_layer=pts_voxel_layer,
@@ -282,9 +275,6 @@ model = dict(
     pts_middle_encoder=pts_middle_encoder,
     pts_backbone=pts_backbone,
     pts_neck=pts_neck,
-
-    # TPV stack.
-    tpv_encoder=tpv_encoder,
 
     # Occupancy head.
     pts_bbox_head=dict(
@@ -307,11 +297,6 @@ model = dict(
             num_classes=len(occ_names),  # Semantic class count.
             num_refines=num_refines,  # Progressive refinement schedule.
             scales=[0.5],  # Coordinate scaling factors.
-
-            # TPV sampling setup from TPV-lite depth-gt config.
-            use_pts_sampling=True,  # Enable point-feature sampling path.
-            use_tpv_sampling=False,  # Disable TPV sampling path.
-            tpv_fusion_mode='query_attn',  # Use query attention for TPV fusion.
 
             # Query allocator configuration.
             query_allocator=dict(
@@ -504,7 +489,7 @@ test_pipeline = [
 
 
 # -------------------- Dataloaders --------------------
-batch_size = 12  # Per-GPU train batch size.
+batch_size = 16  # Global train batch size; scaled by world size in train.py.
 
 train_dataloader = dict(
     batch_size=batch_size,
@@ -576,7 +561,6 @@ optim_wrapper = dict(
     optimizer=optimizer,
     paramwise_cfg=dict(
         custom_keys={
-            'img_backbone': dict(lr_mult=0.1),  # Lower LR for pretrained image backbone.
             'sampling_offset': dict(lr_mult=0.1),  # Lower LR for offset params.
         }
     ),
