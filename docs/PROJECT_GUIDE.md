@@ -17,7 +17,6 @@
 conda activate opus-mmcv2
 ```
 
-
 ## Repo layout (high level)
 - `configs/`: model & dataset configs (OPUSV1/OPUSV2, fusion variants)
 - `models/`: core model implementations (OPUSV1, OPUSV1Fusion, heads, transformers)
@@ -348,46 +347,58 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 
 ---
 
-## MapAnything 融合分支（616 对齐版）
+## MapAnything 外部分支（当前 pure bilinear path）
+
+### 当前办公室 flat 配置语义
+- 当前组合配置以 `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear_flat.py` 为准。
+- 图像路径走 **纯外部编码器**：
+  - `model.use_external_img_encoder=True`
+  - `img_backbone=None`
+  - `img_neck=None`
+  - `img_feature_fusion=None`
+- 含义：不再走 `ResNet/FPN` 主分支，也不再做“FPN + MapAnything weighted sum”；直接使用 `MapAnythingOccEncoder` 产出的多层图像特征。
+- 组合语义可以概括为：`MapAnything only + bilinear pyramid + GT-depth pseudo points + TPV`。
 
 ### 模块职责（通用结构）
 - `models/mapanything/input_adapter.py`  
   将 OPUS 的 `img[B,TN,C,H,W] + img_metas + optional points/mapanything_extra` 转成 MapAnything 的 `views(list[dict])` 输入格式（单视角 HWC 图像 + 视角元数据）。
 - `models/mapanything/opus_mapanything_wrapper.py`  
-  负责 MapAnything 模型加载（支持 `from_pretrained`）、预处理（`preprocess_inputs`）、前向与设备/冻结控制。
+  负责 MapAnything 模型加载（支持 `from_pretrained`）、预处理（`preprocess_inputs`）、前向与设备/冻结控制，以及 bilinear pyramid 适配。
 - `models/mapanything/output_adapter.py`  
   将 MapAnything 输出统一为 OPUS 可消费的张量格式：`[B, TN, C, Hf, Wf]`。
 - `models/backbones/mapanything_occ_encoder.py`  
   作为可注册 backbone（`type='MapAnythingOccEncoder'`），提供 frame chunk 前向、TN 对齐和 OPUS 接口桥接。
 - `models/opusv1_fusion/opus.py`（detector 融合点）  
-  保留原始 `img_backbone + img_neck(FPN)` 主分支，并叠加 MapAnything 外部分支做逐层加权融合。
+  当 `use_external_img_encoder=True` 时，图像路径会直接走外部编码器返回多层特征，绕过内部 `ResNet/FPN` 主分支。
 
-### 融合公式与配置键
-- 融合前：MapAnything 输出单尺度 `M[B,TN,Cm,Hm,Wm]`，先经 `1x1 conv` 投影到 `embed_dims` 得到 `M'`。
-- 对 FPN 每层 `i`（共 4 层）：
-  - `M_i = Interpolate(M', size=F_i_hw, mode=interp_mode, align_corners=...)`
-  - `Fuse_i = alpha_i * F_i + beta_i * M_i`
-- 配置入口：`model.img_feature_fusion`
-  - `alpha`: 每层主分支权重（长度 4）
-  - `beta`: 每层 MapAnything 权重（长度 4）
-  - `interp_mode`: 默认 `bilinear`
-  - `align_corners`: 默认 `False`
+### Bilinear pyramid 模式与 `anyup_cfg` 语义
+- 当前配置中的 `img_encoder.anyup_cfg.enabled=True` 只是启用“金字塔适配路径”，不是启用 AnyUp 网络本体。
+- 真正决定是否实例化 AnyUp 模型的是 `img_encoder.anyup_cfg.mode`：
+  - `mode='anyup'`：加载 AnyUp checkpoint，走 AnyUp 网络前向。
+  - `mode='bilinear'`：不创建 AnyUp 模型，改为使用 `F.interpolate(...)` 做上采样与金字塔构建。
+- 因为 OPUS transformer 仍然期望 `num_levels=4`，所以当前 pure-MapAnything 配置必须保留 `enabled=True`，让 wrapper 把单层 MapAnything 特征扩成 4 层 bilinear pyramid。
+- 当前 bilinear pyramid 还会通过 `output_channels=256` 把各层投影到 OPUS `embed_dims`，以匹配 transformer 输入通道。
 
-### 冻结策略
-- `MapAnything encoder` 全冻结：`requires_grad=False` + `eval()`，不参与训练。
-- 融合投影层（`1x1 conv`）保持可训练，参与反向传播。
+### 分辨率约束与 `640 -> 630` 问题
+- MapAnything 主干使用 `patch_size=14`，`fixed_size` 预处理会把输入宽高向下对齐到 14 的整数倍。
+- 这意味着如果你把 `mapanything_preprocess_cfg.size=(640,640)`，MapAnything 实际看到的不是 `640x640`，而是 `630x630`。
+- 旧问题的根源是：
+  - OPUS 主链 `ida_aug_conf.final_dim=640`，因此 `img_metas['img_shape']` 按 `640` 记录；
+  - MapAnything `fixed_size + patch_size=14` 实际会落到 `630`；
+  - 两条分支的几何/采样分辨率不一致，容易造成投影归一化错位。
+- 当前修正后的建议是：
+  - 原始输入图仍按 `H=640, W=640` 记录；
+  - `ida_aug_conf.final_dim=(630,630)`；
+  - `mapanything_preprocess_cfg.size=(630,630)`；
+  - 两条链路都使用同一 patch-aligned 最终尺寸。
 
-### 分辨率约束与 616 选择
-- MapAnything 主干为 `DINOv2-L/14`，输入宽高必须可被 `patch_size=14` 整除。
-- 直接设置 `512` 在某些预处理路径会被截断/重映射，容易出现几何对齐歧义。
-- 本次融合落地统一采用 `616`（`616 % 14 == 0`），并将 OPUS 图像 pad 约束改为 `size_divisor=8`，避免被 pad 到 `640`。
-
-### 调试 checklist（每次改动后必看）
-1. **shape**：Map 输出是否为 `[B,TN,1024,44,44]`（616 输入）以及融合后 4 层形状是否与原 FPN 完全一致。
-2. **meta**：`img_metas['img_shape'/'pad_shape'/'input_shape']` 是否与实际输入一致，避免投影采样错位。
-3. **pad**：确认 `size_divisor=8` 时 616 不会被隐式 pad 到 640。
-4. **requires_grad**：MapAnything 分支参数是否全部冻结；融合投影层是否可训练。
-5. **optional extra**：`mapanything_extra` 缺失时应自动回退空字典流程，不影响原训练/推理。
+### 调试 checklist（当前 pure-MapAnything 配置）
+1. **branch**：确认 `use_external_img_encoder=True` 且 `img_feature_fusion=None`；否则你不是在 pure-MapAnything 路径上。
+2. **mode**：确认 `anyup_cfg.enabled=True` 且 `mode='bilinear'`；这表示启用 bilinear pyramid，不表示启用 AnyUp 网络。
+3. **resolution**：始终同步修改 `ida_aug_conf.final_dim` 与 `mapanything_preprocess_cfg.size`；对当前 `640` 原图与 `patch_size=14`，推荐两者都设为 `630`。
+4. **meta**：`img_metas['img_shape'/'pad_shape'/'input_shape']` 必须与实际最终图像尺寸一致，否则 `sampling_4d` 投影会错位。
+5. **shape**：630 输入下，raw MapAnything token map 恢复后应接近 `45x45`；随后 bilinear pyramid 应给出 4 层图像特征供 `transformer.num_levels=4` 使用。
+6. **legacy notes**：旧的 `616 + size_divisor=8 + ResNet/FPN weighted fusion` 方案属于历史融合路径，不再适用于当前办公室 flat 配置。
 
 ---
 

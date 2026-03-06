@@ -6,9 +6,10 @@ This file is a fast-start guide for new sessions working in this repository.
 1. `docs/TASK_WORKORDER_CURRENT.md`
 2. `docs/PROJECT_GUIDE.md`
 3. `docs/INDEX.md`
-4. `docs/LIDAR_FEATURE_EXTRACTOR_FLOW.md` (only when LiDAR branch details are needed)
+4. `docs/INSTALL_opus_gpt.md` (only when environment or launcher behavior needs verification)
 
 If `docs/TASK_WORKORDER_CURRENT.md` is missing, copy from `docs/TASK_WORKORDER_TEMPLATE.md` first.
+If a deleted historical doc is mentioned in old notes, prefer the current guide plus direct code inspection.
 
 ## 2) Environment and Working Directory
 - Repository root: `/root/wjl/OPUS_mmcv2`
@@ -39,6 +40,7 @@ If `docs/TASK_WORKORDER_CURRENT.md` is missing, copy from `docs/TASK_WORKORDER_T
   - `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear.py`
 - Flat standalone version of the combined config:
   - `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear_flat.py`
+  - Current semantics: pure `MapAnything` external image encoder + bilinear pyramid, GT-depth pseudo points, TPV; no `ResNet/FPN`, no AnyUp network forward.
 
 ## 5) Run and Resume Conventions
 - Standard 8-GPU run:
@@ -67,6 +69,10 @@ If `docs/TASK_WORKORDER_CURRENT.md` is missing, copy from `docs/TASK_WORKORDER_T
 - `sparse_shape` order is `[z, y, x]`, and must match `point_cloud_range` with `pc_voxel_size`.
 - Early depth runs can show near-zero mIoU if `model.test_cfg.pts.score_thr` is too high.
 - TPV-only mode can trigger DDP unused-parameter errors if unused point conv branches are not handled correctly.
+- For `TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear_flat.py`, keep `ida_aug_conf.final_dim` and `mapanything_preprocess_cfg.size` aligned.
+  - Source images remain `640x640`, but with `patch_size=14` the actual patch-aligned training size should be `630x630` on both paths.
+- `img_encoder.anyup_cfg.enabled=True` with `mode='bilinear'` means “enable bilinear pyramid adapter”, not “instantiate AnyUp network”.
+  - Do not turn `enabled` off unless you also redesign the image feature levels expected by the transformer.
 
 ## 8) Validation Checklist for Changes
 1. Compile changed python files:

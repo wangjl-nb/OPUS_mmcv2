@@ -6,18 +6,13 @@ This folder centralizes all markdown documentation for fast project onboarding a
 
 1. `TASK_WORKORDER_CURRENT.md`
 2. `PROJECT_GUIDE.md`
-3. `LIDAR_FEATURE_EXTRACTOR_FLOW.md`
-4. `INSTALL_opus_gpt.md`
-5. `README.md`
+3. `INSTALL_opus_gpt.md`
+4. `TASK_WORKORDER_TEMPLATE.md`
 
 ## Core Project Docs
 
-- `README.md`
-  Main project intro, model zoo, training/eval usage.
 - `PROJECT_GUIDE.md`
-  Project architecture, code-entry mapping, troubleshooting knowledge.
-- `LIDAR_FEATURE_EXTRACTOR_FLOW.md`
-  Detailed LiDAR branch tensor flow and shape derivation.
+  Project architecture, code-entry mapping, current MapAnything/TPV notes, troubleshooting knowledge.
 - `INSTALL_opus_gpt.md`
   Environment setup and validation commands.
 - `TASK_WORKORDER_TEMPLATE.md`
@@ -45,6 +40,7 @@ This folder centralizes all markdown documentation for fast project onboarding a
 
 ## Notes
 
+- `docs/README.md` and `docs/LIDAR_FEATURE_EXTRACTOR_FLOW.md` were removed; use `PROJECT_GUIDE.md` plus direct code references instead.
 - Markdown files were moved into `docs/` with path mirroring (e.g. `templates/...` -> `docs/templates/...`).
 - Source code, configs, and assets stay in their original directories.
 - For path-sensitive commands, run from repo root unless a doc explicitly says otherwise.

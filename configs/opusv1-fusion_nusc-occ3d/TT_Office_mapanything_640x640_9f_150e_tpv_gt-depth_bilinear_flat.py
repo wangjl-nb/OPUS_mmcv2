@@ -102,7 +102,7 @@ dataset_cfg = dict(
 # -------------------- Model Capacity --------------------
 embed_dims = 256  # Shared embedding channels.
 num_layers = 6  # Transformer decoder layers.
-num_query = 9600  # Occupancy query count.
+num_query = 12800  # Occupancy query count.
 num_frames = 9  # 1 current + 8 sweeps.
 num_levels = 4  # FPN feature levels.
 num_points = 4  # Sampling points per query/level.
@@ -117,26 +117,9 @@ query_init_mix_cfg = dict(
 
 
 # -------------------- Image Branch --------------------
-img_backbone = dict(
-    type='ResNet',  # 2D backbone.
-    _scope_='mmdet',  # Use mmdet registry for ResNet.
-    depth=50,  # ResNet-50.
-    num_stages=4,  # Four stages.
-    out_indices=(0, 1, 2, 3),  # Export all stages.
-    frozen_stages=1,  # Freeze stem + stage1 for stability.
-    norm_cfg=dict(type='BN2d', requires_grad=True),  # BatchNorm2d with trainable params.
-    norm_eval=True,  # Freeze BN running stats in train.
-    style='pytorch',  # PyTorch ResNet style.
-    with_cp=True,  # Enable checkpointing to save memory.
-)
+img_backbone = None  # Disable ResNet; image features come only from MapAnything.
 
-img_neck = dict(
-    type='FPN',  # Feature pyramid network.
-    _scope_='mmdet',  # Use mmdet registry.
-    in_channels=[256, 512, 1024, 2048],  # ResNet stage channels.
-    out_channels=embed_dims,  # Unified FPN channels.
-    num_outs=num_levels,  # Number of output scales.
-)
+img_neck = None  # Disable FPN; multi-level features come from bilinear pyramid expansion.
 
 mapanything_model_cfg = dict(
     load_type='from_pretrained',  # Load MapAnything from pretrained assets.
@@ -146,7 +129,7 @@ mapanything_model_cfg = dict(
 
 mapanything_preprocess_cfg = dict(
     resize_mode='fixed_size',  # Deterministic resize for consistent features.
-    size=(616, 616),  # Input spatial size for MapAnything.
+    size=(630, 630),  # Match IDA final_dim after patch-size alignment.
     patch_size=14,  # Patch size used by the encoder.
     norm_type='dinov2',  # Normalization convention.
 )
@@ -162,18 +145,18 @@ img_encoder = dict(
     mapanything_model_cfg=mapanything_model_cfg,  # MapAnything model loading config.
     mapanything_preprocess_cfg=mapanything_preprocess_cfg,  # MapAnything preprocess config.
     anyup_cfg=dict(
-        enabled=False,  # AnyUp is disabled in this experiment.
+        enabled=True,  # Enable pyramid building for external-image encoder path.
         repo_root='/root/wjl/OPUS_mmcv2/third_party/anyup',  # AnyUp local source root.
         variant='anyup_multi_backbone',  # AnyUp model variant.
         checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',  # AnyUp checkpoint path.
         allow_online_download_if_missing=False,  # Disallow online fallback download by default.
         q_chunk_size=64,  # Query chunk size for AnyUp runtime.
         view_batch_size=6,  # Per-step view batch size.
-        output_in_channels=1024,  # Input channels expected by AnyUp output head.
-        output_channels=256,  # Output channels aligned to fusion dims.
-        upsample_output_divisor=4,  # Upsampling target divisor.
-        freeze=True,  # Freeze AnyUp when enabled.
-        mode='bilinear',  # Bilinear mode requirement.
+        output_in_channels=1024,  # Raw MapAnything feature channels before projection.
+        output_channels=256,  # Project bilinear pyramid levels to OPUS embed dims.
+        upsample_output_divisor=4,  # Upsample raw features before building the pyramid.
+        freeze=True,  # Keep the optional AnyUp branch frozen; unused in bilinear mode.
+        mode='bilinear',  # Use bilinear upsampling only; do not instantiate AnyUp network.
         pyramid=dict(
             output_divisors=[4, 8, 16, 32],  # Pyramid scales.
             downsample_mode='bilinear',  # Bilinear downsample.
@@ -183,12 +166,7 @@ img_encoder = dict(
     ),
 )
 
-img_feature_fusion = dict(
-    alpha=[0.5, 0.5, 0.5, 0.5],  # Per-level weighting factor alpha.
-    beta=[0.5, 0.5, 0.5, 0.5],  # Per-level weighting factor beta.
-    interp_mode='bilinear',  # Bilinear fusion interpolation.
-    align_corners=False,  # Keep bilinear align_corners disabled.
-)
+img_feature_fusion = None  # No ResNet/FPN fusion; use pure MapAnything bilinear pyramid features.
 
 img_norm_cfg = dict(
     mean=[123.675, 116.280, 103.530],  # ImageNet-like mean.
@@ -265,6 +243,7 @@ model = dict(
         img_pad_cfg=dict(size_divisor=14),  # Pad to transformer patch divisor.
     ),
     stop_prev_grad=0,  # Temporal gradient stop strategy.
+    use_external_img_encoder=True,  # Consume MapAnything encoder output directly.
 
     # Branch switches (TPV on, pure point-only branch off).
     enable_tpv_feature_branch=True,
@@ -393,11 +372,11 @@ model = dict(
 # -------------------- Data Augmentation --------------------
 ida_aug_conf = {
     'resize_lim': (1.0, 1.0),  # Locked scale (no random resize).
-    'final_dim': (616, 616),  # Final training/eval image shape.
+    'final_dim': (630, 630),  # Match MapAnything patch-aligned input resolution.
     'bot_pct_lim': (0.0, 0.0),  # No random bottom crop.
     'rot_lim': (0.0, 0.0),  # No random rotation.
-    'H': 616,  # Original height prior for augmentation.
-    'W': 616,  # Original width prior for augmentation.
+    'H': 640,  # Original height prior for augmentation.
+    'W': 640,  # Original width prior for augmentation.
     'rand_flip': True,  # Random horizontal flip enabled.
 }
 
