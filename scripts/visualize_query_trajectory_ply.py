@@ -314,11 +314,29 @@ def extract_img_metas(data_samples):
 def forward_query_outputs(model, inputs, data_samples):
     img = inputs.get('img') if isinstance(inputs, dict) else inputs
     points = inputs.get('points') if isinstance(inputs, dict) else None
+    mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
     img_metas = extract_img_metas(data_samples)
 
-    img_feats = None if not getattr(model, 'with_img_backbone', False) else model.extract_img_feat(img, img_metas)
+    if isinstance(img, torch.Tensor) and img.dim() >= 1 and hasattr(model, '_normalize_mapanything_extra'):
+        mapanything_extra = model._normalize_mapanything_extra(
+            mapanything_extra, batch_size=int(img.shape[0]))
+
+    need_img_branch = getattr(model, '_need_img_branch', None)
+    if callable(need_img_branch):
+        img_feats = model.extract_img_feat(
+            img,
+            img_metas,
+            points=points,
+            mapanything_extra=mapanything_extra) if need_img_branch() else None
+    else:
+        img_feats = None if not getattr(model, 'with_img_backbone', False) else model.extract_img_feat(img, img_metas)
+
     pts_feats = None
-    if getattr(model, 'with_pts_backbone', False):
+    if hasattr(model, '_extract_pts_feat_for_head'):
+        pts_feats = model._extract_pts_feat_for_head(points)
+        if pts_feats is not None and hasattr(model, '_maybe_drop_lidar_feat'):
+            pts_feats = model._maybe_drop_lidar_feat(pts_feats)
+    elif getattr(model, 'with_pts_backbone', False):
         pts_feats = model.extract_pts_feat(points)
         if isinstance(pts_feats, (list, tuple)):
             if hasattr(model, 'final_conv'):
@@ -326,8 +344,15 @@ def forward_query_outputs(model, inputs, data_samples):
             elif len(pts_feats) == 1:
                 pts_feats = pts_feats[0]
 
+    tpv_feats = model._extract_tpv_feat_for_head(points) if hasattr(model, '_extract_tpv_feat_for_head') else None
+
     try:
-        outs = model.pts_bbox_head(mlvl_feats=img_feats, pts_feats=pts_feats, points=points, img_metas=img_metas)
+        outs = model.pts_bbox_head(
+            mlvl_feats=img_feats,
+            pts_feats=pts_feats,
+            tpv_feats=tpv_feats,
+            points=points,
+            img_metas=img_metas)
     except TypeError:
         try:
             outs = model.pts_bbox_head(mlvl_feats=img_feats, points=points, img_metas=img_metas)
