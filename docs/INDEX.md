@@ -19,6 +19,10 @@ This folder centralizes all markdown documentation for fast project onboarding a
   Blank workorder template.
 - `TASK_WORKORDER_CURRENT.md`
   Current task context and handoff log.
+- `reports/TT_Office_binary_occ_pca128_report.md`
+  Binary-occ + PCA128 office experiment report.
+- `reports/TT_Office_binary_occ_pca256_mixloss_report.md`
+  Binary-occ + PCA256 mixed-loss office experiment report.
 
 ## Dataset Template Docs
 

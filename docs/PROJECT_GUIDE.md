@@ -127,6 +127,12 @@ Key files:
 5. **最小验证**：先做一个最小改动验证假设（只改 1~2 个开关或 1 处逻辑）。
 6. **结果记录**：保留“现象 -> 改动 -> 结果 -> 下一步”四行结论，便于接力。
 
+## Demo / Visualization 约定
+- 所有新的 demo、PLY、query 可视化结果统一放在 `/root/wjl/OPUS_mmcv2/demos`。
+- 导出预测 PLY 时，要先确认脚本是否默认应用 `mask_camera`。
+  - 当前多帧导出脚本默认会按 `mask_camera` 裁掉预测体素。
+  - 若需要查看完整预测点云，应显式关闭该裁剪开关，而不是只改评估配置。
+
 ---
 
 ## OPUSV1 forward (camera-only)
@@ -399,6 +405,59 @@ OPUSV1Fusion head adds optional training strategies (via `train_cfg`):
 4. **meta**：`img_metas['img_shape'/'pad_shape'/'input_shape']` 必须与实际最终图像尺寸一致，否则 `sampling_4d` 投影会错位。
 5. **shape**：630 输入下，raw MapAnything token map 恢复后应接近 `45x45`；随后 bilinear pyramid 应给出 4 层图像特征供 `transformer.num_levels=4` 使用。
 6. **legacy notes**：旧的 `616 + size_divisor=8 + ResNet/FPN weighted fusion` 方案属于历史融合路径，不再适用于当前办公室 flat 配置。
+
+---
+
+## Binary-Occ + PCA128 语义特征监督（办公室当前实验）
+
+### 当前配置
+- 当前 feature-learning 主实验以 `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_binary-occ_pca128_feat_flat.py` 为准。
+- 该配置替代了已删除的旧版 `..._pca128_feat_flat.py`（旧版是“79 类语义 cls + 128-d feature”并行监督）。
+
+### 设计目标
+- 将“有没有东西”和“是什么类别”拆开：
+  - `occ score` 只负责 occupiedness/query gating；
+  - `128-d feat` 只负责语义 prototype 对齐与最终类别解码。
+- 这样可以避免旧版中 `cls head` 和 `feat head` 同时学习语义、但最终只信 feature 分支的目标冲突。
+
+### 训练逻辑
+- `models/opusv1_fusion/opus_transformer.py`
+  - `transformer.score_mode='binary_occ'` 时，decoder 输出单通道 `occ score`，不再输出 79 类语义 logits。
+  - `feat_branch` 保留，继续从同一个 `query_feat` 输出 `128-d` semantic feature。
+- `models/opusv1_fusion/opus_head.py`
+  - `loss_occ`：根据预测点到最近 GT 非空体素的距离构造二值 occupiedness target。
+  - `occ_target_cfg.pos_dist_thr=0.10`：判为正样本。
+  - `occ_target_cfg.neg_dist_thr=0.20`：判为负样本。
+  - 中间带 `(0.10, 0.20)` 忽略，不参与 `loss_occ`。
+  - `loss_feat`：只对正样本计算，目标来自 `office79_prototypes_ae128.npz` 中的 `latent_128` prototype。
+  - 当前默认权重：
+    - `loss_occ` focal weight = `1.0`
+    - `loss_feat` cosine = `2.0`
+    - `loss_feat` mse = `0.1`
+
+### 推理解码
+- 先用 `occ score` 对 refined points 做筛选，再聚合到 voxel。
+- 聚合后的 voxel 继续用二值 `occ score` 做保留。
+- 仅对保留下来的 voxel，用 `128-d voxel feature` 与 prototype bank 做 cosine similarity。
+- `argmax(similarity)` 输出最终语义类别。
+
+### 调试 checklist（binary-occ feature 配置）
+1. **score mode**：确认 `transformer.score_mode='binary_occ'` 且 `occ_out_channels=1`。
+2. **feature supervision**：确认 `feature_supervision.only_positive=True`，否则 feature loss 会被负样本污染。
+3. **thresholds**：确认 `occ_target_cfg.pos_dist_thr <= neg_dist_thr`；默认 `0.10 / 0.20`。
+4. **test gating**：确认 `model.test_cfg.pts.score_thr=0.1`；过高会在 early epoch 误删 feature queries。
+5. **single-GPU val/test**：测试管道必须让多帧图像走 offline path；当前配置已设置 `LoadMultiViewImageFromMultiSweeps(..., force_offline=True)`。
+6. **mapanything_extra**：`loaders/pipelines/loading.py` 当前已兼容 online val/test 场景下 `filename` 长于 `img` 的 batch；如果后续修改这段逻辑，不要回退这个兼容性修复。
+
+### 综合升级方向（PCA256 + mixed semantic loss）
+- 若 `binary-occ + PCA128 regression` 已经把 `IoU` 拉高但 `mIoU` 仍然偏低，优先考虑：
+  - 把文本 prototype 从 `PCA128` 升到 `PCA256`
+  - 将 semantic supervision 从纯 `cosine/mse regression` 改为混合损失：
+    - `cosine prototype alignment`
+    - `prototype CE`
+    - `hard-negative margin`
+  - 同时扩大 semantic 正样本覆盖（强正样本 + 弱正样本）并增加尾类权重
+- 这条路线的目的不是重新训练一个闭集分类头，而是在保留开放词表语义几何的前提下提高当前数据集的类别可分性。
 
 ---
 

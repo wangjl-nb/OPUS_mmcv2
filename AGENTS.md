@@ -29,18 +29,13 @@ If a deleted historical doc is mentioned in old notes, prefer the current guide 
   - `loaders/pipelines/loading.py`
   - `loaders/pipelines/pack_occ3d_inputs.py`
 
-## 4) Active Config Anchors
-- Fusion baseline:
-  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e.py`
-- TPV + GT depth points:
-  - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_tpv_lite_depth_gt.py`
-- MapAnything office config:
-  - `configs/opusv1-fusion_nusc-occ3d/Tartanground_office_res_map_sum_0.5_gts0.1.py`
-- Combined TPV + depth + mapanything:
-  - `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear.py`
-- Flat standalone version of the combined config:
-  - `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear_flat.py`
-  - Current semantics: pure `MapAnything` external image encoder + bilinear pyramid, GT-depth pseudo points, TPV; no `ResNet/FPN`, no AnyUp network forward.
+## 4) Config Discovery Flow
+- Do not assume a single canonical experiment config; this repo keeps multiple task-specific configs over time.
+- For any new session:
+  1. Start from the user-provided config path if one exists.
+  2. Otherwise inspect the most recent active run under `outputs/<ModelType>/...` and read its frozen config copy first.
+  3. Only then trace back to the source config in `configs/`.
+- When comparing runs, prefer the frozen config inside the output directory over the source config in `configs/`, because source configs may have changed after the run started.
 
 ## 5) Run and Resume Conventions
 - Standard 8-GPU run:
@@ -61,6 +56,7 @@ If a deleted historical doc is mentioned in old notes, prefer the current guide 
 - Keep robust `mapanything_extra` batch/shape handling:
   - `models/mapanything/input_adapter.py`
   - `models/opusv1_fusion/opus.py`
+  - `loaders/pipelines/loading.py`
 
 ## 7) Common Pitfalls
 - `pc_voxel_size` and `voxel_size` are not interchangeable:
@@ -69,12 +65,19 @@ If a deleted historical doc is mentioned in old notes, prefer the current guide 
 - `sparse_shape` order is `[z, y, x]`, and must match `point_cloud_range` with `pc_voxel_size`.
 - Early depth runs can show near-zero mIoU if `model.test_cfg.pts.score_thr` is too high.
 - TPV-only mode can trigger DDP unused-parameter errors if unused point conv branches are not handled correctly.
-- For `TT_Office_mapanything_640x640_9f_150e_tpv_gt-depth_bilinear_flat.py`, keep `ida_aug_conf.final_dim` and `mapanything_preprocess_cfg.size` aligned.
-  - Source images remain `640x640`, but with `patch_size=14` the actual patch-aligned training size should be `630x630` on both paths.
+- In pure external-encoder MapAnything paths, keep `ida_aug_conf.final_dim` and `mapanything_preprocess_cfg.size` aligned.
+  - With `patch_size=14`, a nominal `640x640` image typically needs a patch-aligned `630x630` effective input size.
+- In binary-occupiedness + feature-supervision heads, keep the score mode, positive-only feature supervision, and test-time score threshold logically aligned.
+- Single-GPU val/test with `mapanything_extra` can diverge from offline multiframe behavior unless the sweeps loader is forced into offline mode.
 - `img_encoder.anyup_cfg.enabled=True` with `mode='bilinear'` means “enable bilinear pyramid adapter”, not “instantiate AnyUp network”.
   - Do not turn `enabled` off unless you also redesign the image feature levels expected by the transformer.
 
-## 8) Validation Checklist for Changes
+## 8) Visualization And Demo Outputs
+- Store generated demo and visualization artifacts under `/root/wjl/OPUS_mmcv2/demos`.
+- Before using a visualization script, check whether it applies `mask_camera` by default.
+  - Some export paths intentionally crop predictions to camera-visible voxels unless explicitly disabled.
+
+## 9) Validation Checklist for Changes
 1. Compile changed python files:
    - `conda run -n opus-mmcv2 python -m py_compile <changed_files>`
 2. For config edits, parse config explicitly:
@@ -85,12 +88,12 @@ If a deleted historical doc is mentioned in old notes, prefer the current guide 
    - `PY`
 3. If touching data pipeline, run a minimal smoke check on one sample or one transform path.
 
-## 9) Git Hygiene
+## 10) Git Hygiene
 - Do not revert unrelated user changes.
 - Do not add temporary one-off scripts to git unless explicitly requested.
 - Keep diffs scoped and traceable to the requested task.
 
-## 10) Recommended Session Loop
+## 11) Recommended Session Loop
 1. Confirm the exact objective, config, and target log/run path.
 2. Reproduce or inspect with the smallest effective check.
 3. Apply minimal code/config changes.

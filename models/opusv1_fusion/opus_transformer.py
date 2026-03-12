@@ -34,7 +34,10 @@ class OPUSV1FusionTransformer(BaseModule):
                  num_classes=10,
                  num_groups=4,
                  num_refines=[1, 2, 4, 8, 16, 32],
+                 feature_dims=0,
                  scales=[1.0],
+                 score_mode='semantic',
+                 occ_out_channels=1,
                  use_pts_sampling=True,
                  use_tpv_sampling=False,
                  tpv_fusion_mode='query_attn',
@@ -48,10 +51,20 @@ class OPUSV1FusionTransformer(BaseModule):
         self.embed_dims = embed_dims
         self.pc_range = pc_range
         self.num_refines = num_refines
+        self.feature_dims = int(feature_dims)
+        self.score_mode = str(score_mode).lower()
+        self.occ_out_channels = int(occ_out_channels)
+        if self.score_mode not in ('semantic', 'binary_occ'):
+            raise ValueError(
+                f'Unsupported score_mode={score_mode}, expected "semantic" or "binary_occ"')
+        if self.score_mode == 'binary_occ' and self.occ_out_channels <= 0:
+            raise ValueError('occ_out_channels must be positive when score_mode="binary_occ"')
 
         self.decoder = OPUSTransformerDecoder(
             embed_dims, num_frames, num_views, num_points, num_layers, num_levels,
-            num_classes, num_refines, num_groups, scales,
+            num_classes, num_refines, num_groups, self.feature_dims, scales,
+            score_mode=self.score_mode,
+            occ_out_channels=self.occ_out_channels,
             use_pts_sampling=use_pts_sampling,
             use_tpv_sampling=use_tpv_sampling,
             tpv_fusion_mode=tpv_fusion_mode,
@@ -62,13 +75,15 @@ class OPUSV1FusionTransformer(BaseModule):
         self.decoder.init_weights()
 
     def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=None):
-        cls_scores, refine_pts = self.decoder(
+        score_preds, refine_pts, feat_scores = self.decoder(
             query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=tpv_feats)
 
-        cls_scores = [torch.nan_to_num(score) for score in cls_scores]
+        score_preds = [torch.nan_to_num(score) for score in score_preds]
         refine_pts = [torch.nan_to_num(pts) for pts in refine_pts]
+        if feat_scores is not None:
+            feat_scores = [torch.nan_to_num(feat) for feat in feat_scores]
 
-        return cls_scores, refine_pts
+        return score_preds, refine_pts, feat_scores
 
 
 class OPUSTransformerDecoder(BaseModule):
@@ -82,7 +97,10 @@ class OPUSTransformerDecoder(BaseModule):
                  num_classes=10,
                  num_refines=16,
                  num_groups=4,
+                 feature_dims=0,
                  scales=[1.0],
+                 score_mode='semantic',
+                 occ_out_channels=1,
                  use_pts_sampling=True,
                  use_tpv_sampling=False,
                  tpv_fusion_mode='query_attn',
@@ -95,6 +113,9 @@ class OPUSTransformerDecoder(BaseModule):
         self.num_frames = num_frames
         self.num_views = num_views
         self.num_groups = num_groups
+        self.feature_dims = int(feature_dims)
+        self.score_mode = str(score_mode).lower()
+        self.occ_out_channels = int(occ_out_channels)
         self.use_pts_sampling = bool(use_pts_sampling)
         self.use_tpv_sampling = bool(use_tpv_sampling)
         if self.use_pts_sampling and self.use_tpv_sampling:
@@ -115,7 +136,10 @@ class OPUSTransformerDecoder(BaseModule):
             self.decoder_layers.append(
                 OPUSTransformerDecoderLayer(
                     embed_dims, num_frames, num_views, num_points, num_levels, num_classes, 
-                    num_groups, num_refines[i], last_refines[i], layer_idx=i, 
+                    num_groups, num_refines[i], last_refines[i], layer_idx=i,
+                    feature_dims=self.feature_dims,
+                    score_mode=self.score_mode,
+                    occ_out_channels=self.occ_out_channels,
                     scale=scales[i], pc_range=pc_range,
                     use_pts_sampling=self.use_pts_sampling,
                     use_tpv_sampling=self.use_tpv_sampling,
@@ -128,7 +152,7 @@ class OPUSTransformerDecoder(BaseModule):
             if hasattr(layer, 'init_weights'):
                 layer.init_weights()
 
-    def _apply_query_allocator(self, query_points, query_feat, cls_score, layer_idx):
+    def _apply_query_allocator(self, query_points, query_feat, score_pred, layer_idx):
         allocator_cfg = self.query_allocator or {}
         if not allocator_cfg.get('enabled', False):
             return query_points, query_feat
@@ -141,14 +165,19 @@ class OPUSTransformerDecoder(BaseModule):
         if Q <= 1:
             return query_points, query_feat
 
-        cls_prob = cls_score.sigmoid()
-        nonempty_score = cls_prob.max(dim=-1).values.mean(dim=-1)  # [B, Q]
+        score_prob = score_pred.sigmoid()
+        if self.score_mode == 'binary_occ':
+            occ_prob = score_prob.squeeze(-1).mean(dim=-1)
+            nonempty_score = occ_prob
+            uncertainty_score = 1.0 - torch.abs(2.0 * occ_prob - 1.0)
+        else:
+            nonempty_score = score_prob.max(dim=-1).values.mean(dim=-1)  # [B, Q]
 
-        num_classes = max(cls_prob.shape[-1], 1)
-        entropy = -(cls_prob.clamp(min=1e-6, max=1 - 1e-6) *
-                    torch.log(cls_prob.clamp(min=1e-6, max=1 - 1e-6))).sum(dim=-1)
-        entropy = entropy / max(np.log(float(num_classes)), 1.0)
-        uncertainty_score = entropy.mean(dim=-1)  # [B, Q]
+            num_classes = max(score_prob.shape[-1], 1)
+            entropy = -(score_prob.clamp(min=1e-6, max=1 - 1e-6) *
+                        torch.log(score_prob.clamp(min=1e-6, max=1 - 1e-6))).sum(dim=-1)
+            entropy = entropy / max(np.log(float(num_classes)), 1.0)
+            uncertainty_score = entropy.mean(dim=-1)  # [B, Q]
 
         score_weights = allocator_cfg.get('score_weights', {})
         nonempty_w = float(score_weights.get('nonempty', 0.5))
@@ -160,7 +189,10 @@ class OPUSTransformerDecoder(BaseModule):
         num_context = max(0, min(Q, num_context))
         num_detail = Q - num_context
 
-        detail_score = nonempty_w * (1.0 - nonempty_score) + uncertainty_w * uncertainty_score
+        if self.score_mode == 'binary_occ':
+            detail_score = nonempty_w * nonempty_score + uncertainty_w * uncertainty_score
+        else:
+            detail_score = nonempty_w * (1.0 - nonempty_score) + uncertainty_w * uncertainty_score
         context_rank = torch.argsort(nonempty_score, dim=-1, descending=True)
         detail_rank = torch.argsort(detail_score, dim=-1, descending=True)
 
@@ -209,7 +241,8 @@ class OPUSTransformerDecoder(BaseModule):
         return new_query_points, new_query_feat
 
     def forward(self, query_points, query_feat, mlvl_feats, pts_feats, img_metas, tpv_feats=None):
-        cls_scores, refine_pts = [], []
+        score_preds, refine_pts = [], []
+        feat_scores = [] if self.feature_dims > 0 else None
 
         ego2img = np.asarray([m['ego2img'] for m in img_metas]).astype(np.float32)
         ego2img = query_feat.new_tensor(ego2img) # [B, N, 4, 4]
@@ -287,21 +320,23 @@ class OPUSTransformerDecoder(BaseModule):
             DUMP.stage_count = i
 
             query_points = query_points.detach()
-            query_feat, cls_score, query_points = decoder_layer(
+            query_feat, score_pred, query_points, feat_score = decoder_layer(
                 query_points, query_feat, mlvl_feats, pts_feats, occ2img, occ2lidar,
                 img_metas, tpv_feats=tpv_feats)
 
-            debug_is_finite(f'decoder_layer[{i}].cls_score', cls_score)
+            debug_is_finite(f'decoder_layer[{i}].score_pred', score_pred)
             debug_is_finite(f'decoder_layer[{i}].query_points', query_points)
-            cls_scores.append(cls_score)
+            score_preds.append(score_pred)
             refine_pts.append(query_points)
+            if feat_scores is not None:
+                feat_scores.append(feat_score)
             query_points, query_feat = self._apply_query_allocator(
                 query_points,
                 query_feat,
-                cls_score,
+                score_pred,
                 layer_idx=i)
 
-        return cls_scores, refine_pts
+        return score_preds, refine_pts, feat_scores
 
 
 class OPUSTransformerDecoderLayer(BaseModule):
@@ -317,6 +352,9 @@ class OPUSTransformerDecoderLayer(BaseModule):
                  last_refines=16,
                  num_cls_fcs=2,
                  num_reg_fcs=2,
+                 feature_dims=0,
+                 score_mode='semantic',
+                 occ_out_channels=1,
                  layer_idx=0,
                  scale=1.0,
                  pc_range=[],
@@ -332,10 +370,17 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.num_points = num_points
         self.num_refines = num_refines
         self.last_refines = last_refines
+        self.feature_dims = int(feature_dims)
+        self.score_mode = str(score_mode).lower()
+        self.occ_out_channels = int(occ_out_channels)
         self.layer_idx = layer_idx
         self.scale = scale
         self.use_pts_sampling = bool(use_pts_sampling)
         self.use_tpv_sampling = bool(use_tpv_sampling)
+        if self.score_mode not in ('semantic', 'binary_occ'):
+            raise ValueError(
+                f'Unsupported score_mode={score_mode}, expected "semantic" or "binary_occ"')
+        self.score_out_channels = num_classes if self.score_mode == 'semantic' else self.occ_out_channels
 
         self.position_encoder = nn.Sequential(
             nn.Linear(3 * self.last_refines, self.embed_dims), 
@@ -367,14 +412,14 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.norm3 = nn.LayerNorm(embed_dims)
 
 
-        cls_branch = []
+        score_branch = []
         for _ in range(num_cls_fcs):
-            cls_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
-            cls_branch.append(nn.LayerNorm(self.embed_dims))
-            cls_branch.append(nn.ReLU(inplace=True))
-        cls_branch.append(nn.Linear(
-            self.embed_dims, self.num_classes * self.num_refines))
-        self.cls_branch = nn.Sequential(*cls_branch)
+            score_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
+            score_branch.append(nn.LayerNorm(self.embed_dims))
+            score_branch.append(nn.ReLU(inplace=True))
+        score_branch.append(nn.Linear(
+            self.embed_dims, self.score_out_channels * self.num_refines))
+        self.score_branch = nn.Sequential(*score_branch)
 
         reg_branch = []
         for _ in range(num_reg_fcs):
@@ -383,6 +428,18 @@ class OPUSTransformerDecoderLayer(BaseModule):
         reg_branch.append(nn.Linear(self.embed_dims, 3 * self.num_refines))
         self.reg_branch = nn.Sequential(*reg_branch)
 
+        if self.feature_dims > 0:
+            feat_branch = []
+            for _ in range(num_cls_fcs):
+                feat_branch.append(nn.Linear(self.embed_dims, self.embed_dims))
+                feat_branch.append(nn.LayerNorm(self.embed_dims))
+                feat_branch.append(nn.ReLU(inplace=True))
+            feat_branch.append(nn.Linear(
+                self.embed_dims, self.feature_dims * self.num_refines))
+            self.feat_branch = nn.Sequential(*feat_branch)
+        else:
+            self.feat_branch = None
+
     @torch.no_grad()
     def init_weights(self):
         self.self_attn.init_weights()
@@ -390,7 +447,7 @@ class OPUSTransformerDecoderLayer(BaseModule):
         self.img_pts_mixing.init_weights()
 
         bias_init = bias_init_with_prob(0.01)
-        nn.init.constant_(self.cls_branch[-1].bias, bias_init)
+        nn.init.constant_(self.score_branch[-1].bias, bias_init)
 
     def refine_points(self, points_proposal, points_delta):
         B, Q = points_delta.shape[:2]
@@ -422,15 +479,19 @@ class OPUSTransformerDecoderLayer(BaseModule):
         query_feat = self.norm3(self.ffn(query_feat))
 
         B, Q = query_points.shape[:2]
-        cls_score = self.cls_branch(query_feat)  # [B, Q, P * num_classes]
+        score_pred = self.score_branch(query_feat)
         reg_offset = self.scale * self.reg_branch(query_feat)  # [B, Q, P * 3]
-        cls_score = cls_score.reshape(B, Q, self.num_refines, self.num_classes)
+        score_pred = score_pred.reshape(B, Q, self.num_refines, self.score_out_channels)
+        feat_score = None
+        if self.feat_branch is not None:
+            feat_score = self.feat_branch(query_feat)
+            feat_score = feat_score.reshape(B, Q, self.num_refines, self.feature_dims)
         refine_pt = self.refine_points(query_points, reg_offset)
 
         if DUMP.enabled:
             pass # TODO: enable OTR dump
 
-        return query_feat, cls_score, refine_pt
+        return query_feat, score_pred, refine_pt, feat_score
 
 
 class OPUSSelfAttention(BaseModule):

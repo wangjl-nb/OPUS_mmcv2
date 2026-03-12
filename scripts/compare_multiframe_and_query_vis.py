@@ -31,6 +31,8 @@ def parse_args():
     parser.add_argument('--compare-num-workers', type=int, default=4)
     parser.add_argument('--output-format', choices=['ply', 'npz'], default='ply')
     parser.add_argument('--max-voxels', type=int, default=300000000)
+    parser.add_argument('--disable-camera-mask', action='store_true',
+                        help='Forward to compare script to export no-mask sparse prediction PLYs')
     parser.add_argument('--eval-metrics', action='store_true')
     parser.add_argument('--num-shards', type=int, default=1)
     parser.add_argument('--shard-id', type=int, default=0)
@@ -87,6 +89,8 @@ def main():
         compare_cmd.append('--deterministic')
     if args.random_sample:
         compare_cmd.append('--random-sample')
+    if args.disable_camera_mask:
+        compare_cmd.append('--disable-camera-mask')
     _extend_with_indices(compare_cmd, args.sample_indices)
     if args.eval_metrics:
         compare_cmd.append('--eval-metrics')

@@ -40,6 +40,8 @@ def parse_args():
                         help='Forwarded to inference script')
     parser.add_argument('--max-voxels', type=int, default=300000000,
                         help='Max voxels saved in PLY mode, forwarded to inference script')
+    parser.add_argument('--disable-camera-mask', action='store_true',
+                        help='Forwarded to inference script to export unmasked sparse predictions')
     parser.add_argument('--eval-metrics', default=False, action='store_true',
                         help='Compute mIoU/IoU after inference; requires NPZ outputs')
     parser.add_argument('--skip-infer', action='store_true',
@@ -222,6 +224,8 @@ def run_inference(history_frames: int, args) -> str:
         cmd.append('--random-train-sample')
     if args.random_sample:
         cmd.append('--random-sample')
+    if args.disable_camera_mask:
+        cmd.append('--disable-camera-mask')
     if args.sample_indices:
         cmd += ['--sample-indices'] + [str(i) for i in args.sample_indices]
     if args.override:

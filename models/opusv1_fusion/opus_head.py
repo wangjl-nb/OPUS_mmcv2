@@ -1,3 +1,7 @@
+import json
+from pathlib import Path
+
+import numpy as np
 import torch
 import torch.distributed as dist
 import torch.nn as nn
@@ -24,12 +28,19 @@ class OPUSV1FusionHead(BaseModule):
                  init_pos_lidar=None,
                  train_cfg=dict(),
                  test_cfg=dict(max_per_img=100),
+                 feature_supervision=None,
                  loss_cls=dict(
                     type='FocalLoss',
                     use_sigmoid=True,
                     gamma=2.0,
                     alpha=0.25,
                     loss_weight=2.0),
+                 loss_occ=dict(
+                    type='FocalLoss',
+                    use_sigmoid=True,
+                    gamma=2.0,
+                    alpha=0.25,
+                    loss_weight=1.0),
                  loss_pts=dict(type='L1Loss'),
                  init_cfg=None,
                  **kwargs):
@@ -41,11 +52,22 @@ class OPUSV1FusionHead(BaseModule):
         self.test_cfg = test_cfg
         self.fp16_enabled = False
         self.empty_label = empty_label
-        self.loss_cls = build_loss(loss_cls)
-        self.loss_pts = build_loss(loss_pts)
+        loss_cls_cfg = dict(loss_cls or {})
+        if 'type' in loss_cls_cfg and '_scope_' not in loss_cls_cfg:
+            loss_cls_cfg['_scope_'] = 'mmdet'
+        self.loss_cls = build_loss(loss_cls_cfg)
+        loss_pts_cfg = dict(loss_pts or {})
+        if 'type' in loss_pts_cfg and '_scope_' not in loss_pts_cfg:
+            loss_pts_cfg['_scope_'] = 'mmdet'
+        self.loss_pts = build_loss(loss_pts_cfg)
+        self.loss_occ_cfg = dict(loss_occ or {})
+        self.feature_supervision = dict(feature_supervision or {})
         self.transformer = build_transformer(transformer)
         self.num_refines = self.transformer.num_refines
         self.embed_dims = self.transformer.embed_dims
+        self.feature_dims = int(getattr(self.transformer, 'feature_dims', 0) or 0)
+        self.score_mode = str(getattr(self.transformer, 'score_mode', 'semantic')).lower()
+        self.occ_out_channels = int(getattr(self.transformer, 'occ_out_channels', 1) or 1)
         self.voxel_generator = Voxelization(
             voxel_size=voxel_size,
             point_cloud_range=pc_range,
@@ -78,6 +100,14 @@ class OPUSV1FusionHead(BaseModule):
             'tail_ema_updates',
             torch.zeros((), dtype=torch.long),
             persistent=False)
+        occ_target_cfg = dict((self.train_cfg or {}).get('occ_target_cfg', {}))
+        self.occ_pos_dist_thr = float(occ_target_cfg.get('pos_dist_thr', 0.10))
+        self.occ_neg_dist_thr = float(occ_target_cfg.get('neg_dist_thr', 0.20))
+        if self.occ_pos_dist_thr < 0 or self.occ_neg_dist_thr < self.occ_pos_dist_thr:
+            raise ValueError(
+                'occ_target_cfg must satisfy 0 <= pos_dist_thr <= neg_dist_thr, '
+                f'got pos={self.occ_pos_dist_thr}, neg={self.occ_neg_dist_thr}')
+        self._init_feature_supervision()
 
         self._init_layers()
 
@@ -88,6 +118,256 @@ class OPUSV1FusionHead(BaseModule):
 
     def init_weights(self):
         self.transformer.init_weights()
+
+    def _init_feature_supervision(self):
+        cfg = self.feature_supervision
+        self.feature_supervision_enabled = bool(cfg.get('enabled', False))
+        self.prototype_decode_enabled = bool(cfg.get('prototype_decode', self.feature_supervision_enabled))
+        self.prototype_metric = str(cfg.get('similarity', 'cosine')).lower()
+        self.loss_feat_cosine_weight = float(cfg.get('loss_weights', {}).get('cosine', 1.0))
+        self.loss_feat_mse_weight = float(cfg.get('loss_weights', {}).get('mse', 0.1))
+        self.loss_feat_ce_weight = float(cfg.get('loss_weights', {}).get('ce', 0.0))
+        self.loss_feat_margin_weight = float(cfg.get('loss_weights', {}).get('margin', 0.0))
+        self.loss_feat_temperature = float(cfg.get('temperature', 0.07))
+        self.loss_feat_margin = float(cfg.get('margin', 0.10))
+        self.prototype_field = str(cfg.get('prototype_field', 'latent_128'))
+        self.prototype_label_names = list(cfg.get('class_names', []))
+        self.feature_only_positive = bool(cfg.get('only_positive', False))
+        self.feature_strong_pos_dist_thr = float(
+            cfg.get('strong_pos_dist_thr', self.occ_pos_dist_thr))
+        self.feature_weak_pos_dist_thr = float(
+            cfg.get('weak_pos_dist_thr', self.feature_strong_pos_dist_thr))
+        self.feature_weak_pos_weight = float(cfg.get('weak_pos_weight', 1.0))
+        self.tail_feature_weight = float(cfg.get('tail_feature_weight', 1.0))
+        self.register_buffer('prototype_bank', torch.empty(0), persistent=False)
+
+        if self.loss_feat_temperature <= 0:
+            raise ValueError(
+                f'feature_supervision.temperature must be positive, got {self.loss_feat_temperature}')
+        if self.feature_strong_pos_dist_thr < 0 or \
+           self.feature_weak_pos_dist_thr < self.feature_strong_pos_dist_thr:
+            raise ValueError(
+                'feature_supervision strong/weak positive thresholds must satisfy '
+                f'0 <= strong <= weak, got strong={self.feature_strong_pos_dist_thr}, '
+                f'weak={self.feature_weak_pos_dist_thr}')
+        if self.feature_weak_pos_weight < 0:
+            raise ValueError(
+                f'feature_supervision.weak_pos_weight must be non-negative, got {self.feature_weak_pos_weight}')
+
+        if not self.feature_supervision_enabled:
+            return
+        if self.feature_dims <= 0:
+            raise ValueError('feature_supervision.enabled=True requires transformer.feature_dims > 0')
+        if not self.prototype_label_names:
+            raise ValueError('feature_supervision.enabled=True requires class_names')
+
+        prototype_npz_path = cfg.get('prototype_npz_path', None)
+        if not prototype_npz_path:
+            raise ValueError('feature_supervision.enabled=True requires prototype_npz_path')
+        prototype_npz_path = Path(prototype_npz_path)
+        if not prototype_npz_path.exists():
+            raise FileNotFoundError(f'Prototype npz does not exist: {prototype_npz_path}')
+
+        bridge_entries = None
+        prototype_bridge_path = cfg.get('prototype_bridge_path', None)
+        if prototype_bridge_path:
+            prototype_bridge_path = Path(prototype_bridge_path)
+            if not prototype_bridge_path.exists():
+                raise FileNotFoundError(f'Prototype bridge json does not exist: {prototype_bridge_path}')
+            with prototype_bridge_path.open('r', encoding='utf-8') as handle:
+                bridge_entries = json.load(handle).get('entries', [])
+
+        with np.load(prototype_npz_path, allow_pickle=False) as data:
+            if self.prototype_field not in data.files:
+                raise KeyError(
+                    f'Prototype npz missing field "{self.prototype_field}": {prototype_npz_path}')
+            vectors = np.asarray(data[self.prototype_field], dtype=np.float32)
+
+        if vectors.ndim != 2:
+            raise ValueError(f'Prototype bank must be 2D, got {vectors.shape}')
+        if vectors.shape[1] != self.feature_dims:
+            raise ValueError(
+                f'Prototype dim mismatch: expected {self.feature_dims}, got {vectors.shape[1]}')
+
+        if bridge_entries is not None:
+            if len(bridge_entries) != vectors.shape[0]:
+                raise ValueError(
+                    f'Prototype bridge length mismatch: entries={len(bridge_entries)} '
+                    f'vs vectors={vectors.shape[0]}')
+            raw_to_vec = {
+                str(entry['raw_name']): vectors[idx]
+                for idx, entry in enumerate(bridge_entries)
+            }
+        else:
+            with np.load(prototype_npz_path, allow_pickle=True) as data:
+                if 'raw_names' not in data.files:
+                    raise KeyError(
+                        'Prototype npz missing raw_names and no prototype_bridge_path was provided: '
+                        f'{prototype_npz_path}')
+                raw_names = [str(x) for x in data['raw_names'].tolist()]
+            raw_to_vec = {raw_name: vectors[idx] for idx, raw_name in enumerate(raw_names)}
+        bank = []
+        missing = []
+        for label_name in self.prototype_label_names:
+            vec = raw_to_vec.get(str(label_name), None)
+            if vec is None:
+                missing.append(str(label_name))
+                vec = np.zeros((self.feature_dims,), dtype=np.float32)
+            bank.append(vec)
+        if missing:
+            raise KeyError(f'Prototype bank missing labels: {missing}')
+
+        bank = torch.from_numpy(np.stack(bank, axis=0))
+        bank = F.normalize(bank, dim=-1)
+        self.prototype_bank = bank
+
+    @staticmethod
+    def _weighted_mean(values, weights):
+        if values.numel() == 0:
+            return values.sum() * 0.0
+        weights = weights.to(values.dtype)
+        denom = weights.sum().clamp(min=1e-6)
+        return (values * weights).sum() / denom
+
+    def _build_binary_occ_targets(self, pred_pts, pred_paired_pts):
+        pred_dist = torch.norm(pred_pts - pred_paired_pts, dim=-1)
+        positive_mask = pred_dist <= self.occ_pos_dist_thr
+        negative_mask = pred_dist >= self.occ_neg_dist_thr
+        valid_mask = positive_mask | negative_mask
+        occ_targets = positive_mask.to(dtype=pred_pts.dtype)
+        return occ_targets, valid_mask, positive_mask
+
+    def _compute_binary_occ_loss(self, score_preds, occ_targets, valid_mask):
+        if score_preds is None:
+            return None
+        if score_preds.shape[-1] != 1:
+            raise ValueError(
+                f'binary occ mode expects score dim=1, got {score_preds.shape[-1]}')
+        if valid_mask.sum() <= 0:
+            return score_preds.sum() * 0.0
+
+        score_preds = score_preds.squeeze(-1)
+        score_preds = score_preds[valid_mask]
+        occ_targets = occ_targets[valid_mask]
+
+        gamma = float(self.loss_occ_cfg.get('gamma', 2.0))
+        alpha = float(self.loss_occ_cfg.get('alpha', 0.25))
+        loss_weight = float(self.loss_occ_cfg.get('loss_weight', 1.0))
+
+        prob = score_preds.sigmoid()
+        ce_loss = F.binary_cross_entropy_with_logits(
+            score_preds, occ_targets, reduction='none')
+        p_t = prob * occ_targets + (1.0 - prob) * (1.0 - occ_targets)
+        focal_weight = (1.0 - p_t).pow(gamma)
+        alpha_factor = alpha * occ_targets + (1.0 - alpha) * (1.0 - occ_targets)
+        loss = ce_loss * focal_weight * alpha_factor
+        return loss.sum() / max(int(valid_mask.sum().item()), 1) * loss_weight
+
+    def _build_feature_supervision_mask_weights(
+            self, pred_pts, pred_paired_pts, labels, cls_weights, positive_mask=None):
+        if pred_pts.numel() == 0:
+            empty_mask = pred_pts.new_zeros((0,), dtype=torch.bool)
+            empty_weights = pred_pts.new_zeros((0,), dtype=pred_pts.dtype)
+            return empty_mask, empty_weights
+
+        pred_dist = torch.norm(pred_pts - pred_paired_pts, dim=-1)
+        strong_mask = pred_dist <= self.feature_strong_pos_dist_thr
+        weak_mask = (pred_dist > self.feature_strong_pos_dist_thr) & \
+                    (pred_dist <= self.feature_weak_pos_dist_thr)
+
+        if self.feature_only_positive:
+            feature_mask = strong_mask | weak_mask
+        else:
+            feature_mask = torch.ones_like(strong_mask, dtype=torch.bool)
+
+        sample_weights = pred_pts.new_ones(pred_dist.shape[0])
+        sample_weights[weak_mask] = self.feature_weak_pos_weight
+
+        row_idx = torch.arange(labels.shape[0], device=labels.device)
+        scalar_cls_weights = cls_weights[row_idx, labels.long()].to(sample_weights.dtype)
+        sample_weights = sample_weights * scalar_cls_weights
+
+        if self.tail_feature_weight > 1.0:
+            rare_classes = [int(x) for x in (self.train_cfg or {}).get('rare_classes', [])]
+            if rare_classes:
+                tail_mask = torch.zeros_like(feature_mask)
+                for cls_idx in rare_classes:
+                    tail_mask |= (labels == cls_idx)
+                sample_weights[tail_mask] = sample_weights[tail_mask] * self.tail_feature_weight
+
+        if positive_mask is not None and self.feature_strong_pos_dist_thr <= self.occ_pos_dist_thr \
+           and self.feature_weak_pos_dist_thr <= self.occ_pos_dist_thr:
+            # Backward-compatible path when semantic supervision only uses strict occupied queries.
+            feature_mask = positive_mask
+
+        return feature_mask, sample_weights
+
+    def _compute_feature_loss(
+            self,
+            feat_scores,
+            labels,
+            cls_weights,
+            pred_pts=None,
+            pred_paired_pts=None,
+            positive_mask=None):
+        if (not self.feature_supervision_enabled) or feat_scores is None:
+            return None
+
+        if pred_pts is None or pred_paired_pts is None:
+            feature_mask = positive_mask
+            if feature_mask is None:
+                feature_mask = torch.ones(
+                    feat_scores.shape[0], device=feat_scores.device, dtype=torch.bool)
+            row_idx = torch.arange(labels.shape[0], device=labels.device)
+            sample_weights = cls_weights[row_idx, labels.long()].to(feat_scores.dtype)
+        else:
+            feature_mask, sample_weights = self._build_feature_supervision_mask_weights(
+                pred_pts,
+                pred_paired_pts,
+                labels,
+                cls_weights,
+                positive_mask=positive_mask)
+
+        if feature_mask is not None:
+            if feature_mask.sum() <= 0:
+                return feat_scores.sum() * 0.0
+            feat_scores = feat_scores[feature_mask]
+            labels = labels[feature_mask]
+            sample_weights = sample_weights[feature_mask]
+
+        feat_scores = F.normalize(feat_scores, dim=-1)
+        target_feats = self.prototype_bank.index_select(0, labels.long())
+        target_feats = F.normalize(target_feats, dim=-1)
+
+        loss_feat = feat_scores.sum() * 0.0
+        if self.loss_feat_cosine_weight > 0:
+            cosine_loss = 1.0 - F.cosine_similarity(feat_scores, target_feats, dim=-1)
+            loss_feat = loss_feat + self.loss_feat_cosine_weight * self._weighted_mean(
+                cosine_loss, sample_weights)
+
+        if self.loss_feat_mse_weight > 0:
+            mse_loss = F.mse_loss(feat_scores, target_feats, reduction='none').mean(dim=-1)
+            loss_feat = loss_feat + self.loss_feat_mse_weight * self._weighted_mean(
+                mse_loss, sample_weights)
+
+        if self.loss_feat_ce_weight > 0:
+            logits = torch.matmul(feat_scores, self.prototype_bank.t()) / self.loss_feat_temperature
+            ce_loss = F.cross_entropy(logits, labels.long(), reduction='none')
+            loss_feat = loss_feat + self.loss_feat_ce_weight * self._weighted_mean(
+                ce_loss, sample_weights)
+
+        if self.loss_feat_margin_weight > 0:
+            similarity = torch.matmul(feat_scores, self.prototype_bank.t())
+            row_idx = torch.arange(labels.shape[0], device=labels.device)
+            sim_pos = similarity[row_idx, labels.long()]
+            similarity_neg = similarity.clone()
+            similarity_neg[row_idx, labels.long()] = torch.finfo(similarity_neg.dtype).min
+            sim_neg_max = similarity_neg.max(dim=-1).values
+            margin_loss = F.relu(sim_neg_max - sim_pos + self.loss_feat_margin)
+            loss_feat = loss_feat + self.loss_feat_margin_weight * self._weighted_mean(
+                margin_loss, sample_weights)
+
+        return loss_feat
 
     def _uniform_sample_pc_range(self, num_points, device, dtype):
         if num_points <= 0:
@@ -216,7 +496,7 @@ class OPUSV1FusionHead(BaseModule):
                 img_metas=None):
         init_points, query_feat = self.get_init_position(points, mlvl_feats,
                                                          pts_feats, img_metas)
-        cls_scores, refine_pts = self.transformer(
+        score_preds, refine_pts, feat_scores = self.transformer(
             init_points,
             query_feat,
             mlvl_feats,
@@ -225,9 +505,15 @@ class OPUSV1FusionHead(BaseModule):
             tpv_feats=tpv_feats,
         )
 
-        return dict(init_points=init_points,
-                    all_cls_scores=cls_scores,
-                    all_refine_pts=refine_pts)
+        outputs = dict(
+            init_points=init_points,
+            all_refine_pts=refine_pts,
+            all_feat_scores=feat_scores)
+        if self.score_mode == 'binary_occ':
+            outputs['all_occ_scores'] = score_preds
+        else:
+            outputs['all_cls_scores'] = score_preds
+        return outputs
 
     def get_dis_weight(self, pts):
         max_dist = torch.sqrt(
@@ -535,17 +821,22 @@ class OPUSV1FusionHead(BaseModule):
         return pred_pts[keep_idx], pred_paired_pts[keep_idx]
 
     def loss_single(self,
-                    cls_scores,
+                    score_preds,
                     refine_pts,
+                    feat_scores,
                     gt_points_list,
                     gt_masks_list,
                     gt_labels_list,
                     tail_class_mask=None):
-        num_imgs = cls_scores.size(0)  # B
-        cls_scores = cls_scores.reshape(num_imgs, -1, self.num_classes)
+        num_imgs = score_preds.size(0)  # B
+        score_dim = self.num_classes if self.score_mode == 'semantic' else self.occ_out_channels
+        score_preds = score_preds.reshape(num_imgs, -1, score_dim)
+        if feat_scores is not None:
+            feat_scores = feat_scores.reshape(num_imgs, -1, self.feature_dims)
         refine_pts = refine_pts.reshape(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
-        cls_scores_list = [cls_scores[i] for i in range(num_imgs)]
+        score_preds_list = [score_preds[i] for i in range(num_imgs)]
+        feat_scores_list = [feat_scores[i] for i in range(num_imgs)] if feat_scores is not None else None
         refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
 
         tail_mask_list = [tail_class_mask for _ in range(num_imgs)]
@@ -560,7 +851,8 @@ class OPUSV1FusionHead(BaseModule):
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
 
         # concatenate all results from different samples
-        cls_scores = torch.cat(cls_scores_list)
+        score_preds = torch.cat(score_preds_list)
+        feat_scores = torch.cat(feat_scores_list) if feat_scores_list is not None else None
         labels = torch.cat(labels_list)
         cls_weights = torch.cat(cls_weights)
         gt_pts = torch.cat(gt_points_list)
@@ -569,12 +861,18 @@ class OPUSV1FusionHead(BaseModule):
         pred_pts = torch.cat(refine_pts_list)
         pred_paired_pts = torch.cat(pred_paired_pts)
 
-        # calculate loss cls
-        loss_cls = self.loss_cls(
-            cls_scores,
-            labels,
-            weight=cls_weights,
-            avg_factor=cls_scores.shape[0])
+        positive_mask = None
+        if self.score_mode == 'binary_occ':
+            occ_targets, occ_valid_mask, positive_mask = self._build_binary_occ_targets(
+                pred_pts, pred_paired_pts)
+            loss_score = self._compute_binary_occ_loss(
+                score_preds, occ_targets, occ_valid_mask)
+        else:
+            loss_score = self.loss_cls(
+                score_preds,
+                labels,
+                weight=cls_weights,
+                avg_factor=score_preds.shape[0])
 
         # calculate loss pts
         loss_pts = pred_pts.new_tensor(0)
@@ -590,19 +888,31 @@ class OPUSV1FusionHead(BaseModule):
             mined_pred_paired_pts,
             avg_factor=max(mined_pred_pts.shape[0], 1))
 
-        return loss_cls, loss_pts
+        loss_feat = self._compute_feature_loss(
+            feat_scores,
+            labels,
+            cls_weights,
+            pred_pts=pred_pts,
+            pred_paired_pts=pred_paired_pts,
+            positive_mask=positive_mask)
+        return loss_score, loss_pts, loss_feat
 
     @force_fp32(apply_to=('preds_dicts'))
     def loss(self, voxel_semantics, mask_camera, preds_dicts):
         # voxelsemantics [B, X200, Y200, Z16] unocuupied=17
         init_points = preds_dicts['init_points']
-        all_cls_scores = preds_dicts['all_cls_scores']  # [L, B, Q, P, C]
+        if self.score_mode == 'binary_occ':
+            all_score_preds = preds_dicts['all_occ_scores']
+        else:
+            all_score_preds = preds_dicts['all_cls_scores']  # [L, B, Q, P, C]
         all_refine_pts = preds_dicts['all_refine_pts']
+        all_feat_scores = preds_dicts.get('all_feat_scores', None)
         debug_is_finite('head.init_points', init_points)
-        debug_is_finite('head.all_cls_scores', all_cls_scores)
+        debug_is_finite('head.all_score_preds', all_score_preds)
         debug_is_finite('head.all_refine_pts', all_refine_pts)
+        debug_is_finite('head.all_feat_scores', all_feat_scores)
 
-        num_dec_layers = len(all_cls_scores)
+        num_dec_layers = len(all_score_preds)
         gt_points_list, gt_masks_list, gt_labels_list = self.get_sparse_voxels(
             voxel_semantics, mask_camera)
         tail_class_mask = self._resolve_tail_class_mask(gt_labels_list)
@@ -617,10 +927,13 @@ class OPUSV1FusionHead(BaseModule):
         all_gt_labels_list = [gt_labels_list for _ in range(num_dec_layers)]
         all_tail_masks = [tail_class_mask for _ in range(num_dec_layers)]
 
-        losses_cls, losses_pts = multi_apply(
+        if all_feat_scores is None:
+            all_feat_scores = [None for _ in range(num_dec_layers)]
+        losses_score, losses_pts, losses_feat = multi_apply(
             self.loss_single,
-            all_cls_scores,
+            all_score_preds,
             all_refine_pts,
+            all_feat_scores,
             all_gt_points_list,
             all_gt_masks_list,
             all_gt_labels_list,
@@ -629,11 +942,12 @@ class OPUSV1FusionHead(BaseModule):
         loss_dict = dict()
         # loss of init_points
         if init_points is not None and not self.init_pos_lidar:
-            pseudo_scores = init_points.new_zeros(
-                *init_points.shape[:-1], self.num_classes)
-            _, init_loss_pts = self.loss_single(
+            score_dim = self.num_classes if self.score_mode == 'semantic' else self.occ_out_channels
+            pseudo_scores = init_points.new_zeros(*init_points.shape[:-1], score_dim)
+            _, init_loss_pts, _ = self.loss_single(
                 pseudo_scores,
                 init_points,
+                None,
                 gt_points_list,
                 gt_masks_list,
                 gt_labels_list,
@@ -641,22 +955,35 @@ class OPUSV1FusionHead(BaseModule):
             loss_dict['init_loss_pts'] = init_loss_pts
 
         # loss from the last decoder layer
-        loss_dict['loss_cls'] = losses_cls[-1]
+        score_loss_name = 'loss_occ' if self.score_mode == 'binary_occ' else 'loss_cls'
+        loss_dict[score_loss_name] = losses_score[-1]
         loss_dict['loss_pts'] = losses_pts[-1]
+        if self.feature_supervision_enabled and losses_feat[-1] is not None:
+            loss_dict['loss_feat'] = losses_feat[-1]
 
         # loss from other decoder layers
         num_dec_layer = 0
-        for loss_cls_i, loss_pts_i in zip(losses_cls[:-1], losses_pts[:-1]):
-            loss_dict[f'd{num_dec_layer}.loss_cls'] = loss_cls_i
+        for loss_score_i, loss_pts_i, loss_feat_i in zip(
+                losses_score[:-1], losses_pts[:-1], losses_feat[:-1]):
+            loss_dict[f'd{num_dec_layer}.{score_loss_name}'] = loss_score_i
             loss_dict[f'd{num_dec_layer}.loss_pts'] = loss_pts_i
+            if self.feature_supervision_enabled and loss_feat_i is not None:
+                loss_dict[f'd{num_dec_layer}.loss_feat'] = loss_feat_i
             num_dec_layer += 1
         return loss_dict
 
     def get_occ(self, pred_dicts, img_metas, rescale=False):
-        all_cls_scores = pred_dicts['all_cls_scores']
+        if self.score_mode == 'binary_occ':
+            all_score_preds = pred_dicts['all_occ_scores']
+            score_channels = self.occ_out_channels
+        else:
+            all_score_preds = pred_dicts['all_cls_scores']
+            score_channels = self.num_classes
         all_refine_pts = pred_dicts['all_refine_pts']
-        cls_scores = all_cls_scores[-1].sigmoid()
+        all_feat_scores = pred_dicts.get('all_feat_scores', None)
+        score_preds = all_score_preds[-1].sigmoid()
         refine_pts = all_refine_pts[-1]
+        feat_scores = all_feat_scores[-1] if all_feat_scores is not None else None
 
         batch_size = refine_pts.shape[0]
         ctr_dist_thr = self.test_cfg.get('ctr_dist_thr', 3.)
@@ -664,27 +991,48 @@ class OPUSV1FusionHead(BaseModule):
 
         result_list = []
         for i in range(batch_size):
-            refine_pts, cls_scores = refine_pts[i], cls_scores[i]
-            refine_pts = decode_points(refine_pts, self.pc_range)
+            refine_pts_i, score_preds_i = refine_pts[i], score_preds[i]
+            feat_scores_i = feat_scores[i] if feat_scores is not None else None
+            refine_pts_i = decode_points(refine_pts_i, self.pc_range)
 
             # filter weak points by distance and score
-            centers = refine_pts.mean(dim=1, keepdim=True)
-            ctr_dists = torch.norm(refine_pts - centers, dim=-1)
+            centers = refine_pts_i.mean(dim=1, keepdim=True)
+            ctr_dists = torch.norm(refine_pts_i - centers, dim=-1)
             mask_dist = ctr_dists < ctr_dist_thr
-            mask_score = (cls_scores > score_thr).any(dim=-1)
+            mask_score = (score_preds_i > score_thr).any(dim=-1)
             mask = mask_dist & mask_score
-            refine_pts = refine_pts[mask]
-            cls_scores = cls_scores[mask]
+            refine_pts_i = refine_pts_i[mask]
+            score_preds_i = score_preds_i[mask]
+            if feat_scores_i is not None:
+                feat_scores_i = feat_scores_i[mask]
 
-            pts = torch.cat([refine_pts, cls_scores], dim=-1)
+            if refine_pts_i.numel() == 0:
+                result_list.append(dict(
+                    sem_pred=np.zeros((0,), dtype=np.int64),
+                    occ_loc=np.zeros((0, 3), dtype=np.int64)))
+                continue
+
+            if feat_scores_i is not None:
+                pts = torch.cat([refine_pts_i, score_preds_i, feat_scores_i], dim=-1)
+            else:
+                pts = torch.cat([refine_pts_i, score_preds_i], dim=-1)
             pts_infos, voxels, num_pts = self.voxel_generator(pts)
             voxels = torch.flip(voxels, [1]).long()
-            pts, scores = pts_infos[..., :3], pts_infos[..., 3:]
+            score_start = 3
+            score_end = score_start + score_channels
+            scores = pts_infos[..., score_start:score_end]
             scores = scores.sum(dim=1) / num_pts[..., None]
+            voxel_feats = None
+            if feat_scores_i is not None:
+                voxel_feats = pts_infos[..., score_end:]
+                voxel_feats = voxel_feats.sum(dim=1) / num_pts[..., None]
 
             if self.test_cfg.get('padding', True):
+                if voxel_feats is not None and self.prototype_decode_enabled:
+                    raise NotImplementedError(
+                        'feature-supervised prototype decoding requires test_cfg.padding=False')
                 occ = scores.new_zeros((self.voxel_num[0], self.voxel_num[1],
-                                        self.voxel_num[2], self.num_classes))
+                                        self.voxel_num[2], score_channels))
                 occ[voxels[:, 0], voxels[:, 1], voxels[:, 2]] = scores
                 occ = occ.permute(3, 0, 1, 2).unsqueeze(0)
                 # padding
@@ -699,7 +1047,28 @@ class OPUSV1FusionHead(BaseModule):
                 voxels = torch.nonzero((eroded_occ > score_thr).any(dim=-1))
                 scores = eroded_occ[voxels[:, 0], voxels[:, 1], voxels[:, 2], :]
 
-            labels = scores.argmax(dim=-1)
+            if self.score_mode == 'binary_occ':
+                voxel_keep_mask = scores.squeeze(-1) > score_thr
+                voxels = voxels[voxel_keep_mask]
+                scores = scores[voxel_keep_mask]
+                if voxel_feats is not None:
+                    voxel_feats = voxel_feats[voxel_keep_mask]
+
+            if voxels.numel() == 0:
+                result_list.append(dict(
+                    sem_pred=np.zeros((0,), dtype=np.int64),
+                    occ_loc=np.zeros((0, 3), dtype=np.int64)))
+                continue
+
+            if voxel_feats is not None and self.prototype_decode_enabled:
+                if self.prototype_metric != 'cosine':
+                    raise ValueError(
+                        f'Unsupported prototype similarity metric: {self.prototype_metric}')
+                voxel_feats = F.normalize(voxel_feats, dim=-1)
+                similarity = voxel_feats @ self.prototype_bank.t()
+                labels = similarity.argmax(dim=-1)
+            else:
+                labels = scores.argmax(dim=-1)
             result_list.append(dict(
                 sem_pred=labels.detach().cpu().numpy(),
                 occ_loc=voxels.detach().cpu().numpy()))

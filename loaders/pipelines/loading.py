@@ -1401,6 +1401,12 @@ class LoadMapAnythingExtraFromDepth:
             filenames = list(filenames)
         if not isinstance(imgs, list):
             imgs = list(imgs)
+        if len(imgs) > 0 and len(filenames) != len(imgs) and len(filenames) % len(imgs) == 0:
+            # Single-process online val/test keeps only current-frame images in `img`
+            # but still appends all multiframe filenames/poses. The extra builder only
+            # needs the augmented image size, so repeating current-view tensors by frame
+            # count keeps online/offline behavior aligned.
+            imgs = imgs * (len(filenames) // len(imgs))
         if len(filenames) != len(imgs):
             raise ValueError(
                 f'filename/img length mismatch: len(filename)={len(filenames)} vs len(img)={len(imgs)}')

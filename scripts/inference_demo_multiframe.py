@@ -217,6 +217,9 @@ def write_ply(path, xyz, rgb=None, labels=None):
         raise ValueError(f'xyz must have shape [N, 3], got {xyz.shape}')
 
     n = xyz.shape[0]
+    parent_dir = osp.dirname(path)
+    if parent_dir:
+        os.makedirs(parent_dir, exist_ok=True)
     cols = [xyz]
     fmt = ['%.4f', '%.4f', '%.4f']
     header_props = [
@@ -381,6 +384,8 @@ def parse_args():
                         help='Run inference on one random sample from train split')
     parser.add_argument('--deterministic', action='store_true',
                         help='Enable deterministic algorithms')
+    parser.add_argument('--disable-camera-mask', action='store_true',
+                        help='Do not crop sparse predictions by mask_camera before saving outputs')
     if DictAction is None:
         parser.add_argument('--override', nargs='+', default=None,
                             help='Override config (requires mmengine DictAction at runtime)')
@@ -597,13 +602,14 @@ def main():
                 labels = np.asarray(result['sem_pred'], dtype=np.int64)
                 occ_loc = np.asarray(result['occ_loc'], dtype=np.int64)
 
-                mask_camera, _ = get_mask_camera(sample, base_dataset)
-                if mask_camera is None:
-                    if not camera_mask_warned:
-                        print('[MultiFrameInference] mask_camera not found, keep unmasked predictions.')
-                        camera_mask_warned = True
-                else:
-                    occ_loc, labels = apply_dense_mask(occ_loc, labels, mask_camera)
+                if not args.disable_camera_mask:
+                    mask_camera, _ = get_mask_camera(sample, base_dataset)
+                    if mask_camera is None:
+                        if not camera_mask_warned:
+                            print('[MultiFrameInference] mask_camera not found, keep unmasked predictions.')
+                            camera_mask_warned = True
+                    else:
+                        occ_loc, labels = apply_dense_mask(occ_loc, labels, mask_camera)
 
                 if scene_name is None:
                     scene_name = '__unknown_scene__'
@@ -724,6 +730,7 @@ def main():
         history_frames=int(args.history_frames),
         output_format=args.output_format,
         max_voxels=int(args.max_voxels),
+        disable_camera_mask=bool(args.disable_camera_mask),
         num_classes=num_classes,
         empty_label=empty_label,
         dense_dtype=np.dtype(dense_dtype).name if dense_dtype is not None else None,
