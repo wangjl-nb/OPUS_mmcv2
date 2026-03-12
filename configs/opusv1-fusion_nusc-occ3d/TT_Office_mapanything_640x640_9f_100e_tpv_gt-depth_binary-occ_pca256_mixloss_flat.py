@@ -116,8 +116,8 @@ query_init_mix_cfg = dict(
     random_mode='uniform_pc_range',  # Uniform random in point cloud range.
 )
 
-prototype_npz_path = '/root/wjl/Talk2DINO/tartanground_label_ae/artifacts/office79_prototypes_pca256.npz'  # Office-79 PCA256 prototype dictionary.
-prototype_bridge_path = '/root/wjl/Talk2DINO/tartanground_label_ae/vocab/office79_bridge.json'  # Office raw-name to prototype row order bridge.
+prototype_npz_path = f'{dataset_root}office79_prototypes_pca256.npz'  # Office-79 PCA256 prototype dictionary.
+prototype_bridge_path = f'{dataset_root}office79_bridge.json'  # Office raw-name to prototype row order bridge.
 occ_out_channels = 1  # Binary occupied/not-occupied score output channels.
 
 

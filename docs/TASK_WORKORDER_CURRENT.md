@@ -121,6 +121,9 @@
 - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e.py`: aligned class-related params with office reference (`occ_names` 79 classes, `rare_classes`, `cls_weights`) and kept `empty_label=len(occ_names)` auto-consistent.
 - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e.py`: restored prior opencv-depth experiment capacity/weighting settings, but preserved `train_cfg.val_interval=5` for denser validation prints.
 - `configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_depth_points_switch.py`: override `model.test_cfg.pts.score_thr=0.0` to avoid early-epoch over-pruning to empty predictions.
+- `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py`: rewired `prototype_npz_path` / `prototype_bridge_path` from the stale `/root/wjl/Talk2DINO/...` location to local `data/tartanground_demo/office79_prototypes_pca256.npz` and `data/tartanground_demo/office79_bridge.json`.
+- `/root/wjl/Occ-3D/data_preprocess/tartanground_to_occ3d_pkl.py`: GT generation now keeps legacy `mask_camera` and additionally writes per-camera visibility metadata as `mask_camera_bits` (`uint8` bitfield) plus `camera_names` into each `labels.npz`.
+- `scripts/export_gt_viewmask_ply.py`: exports one sample's GT visible voxels into `1view/3view/6view` PLYs using `mask_camera_bits`, copies the corresponding current-frame images, and writes per-case metadata plus a run summary.
 - `PROJECT_GUIDE.md`: documented depth point-source switch and query-init compatibility.
 - `outputs/analysis/tartanground_demo_depth_points_switch_opencv_5ep.py`: analysis-only config copy with `coord_convention='opencv'` for controlled comparison.
 - `models/lidar_encoder/tpv_lite_encoder.py`: replaced with sparse-3D TPV encoder (`high+skip` input, 3D conv refine, FPN-style upsample + residual fusion, then `XY/XZ/YZ` projection).
@@ -161,9 +164,19 @@
 - `[2026-03-11]` Generalized `/root/wjl/Talk2DINO/tartanground_label_ae/scripts/train_tartanground_text_ae.py` to support latent-field naming by dimension and PCA-only prototype export; added `/root/wjl/Talk2DINO/tartanground_label_ae/configs/pca256_talk2dino_reg.json` and exported `office79_prototypes_pca256.npz` with field `latent_256` -> done.
 - `[2026-03-11]` Added integrated office config `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py` (`num_query=9600`, `100e`, `PCA256`, cosine+CE+margin mixed semantic loss, strong/weak semantic positives, `context_ratio=0.5`) -> done.
 - `[2026-03-11]` Launched 8-GPU run for the integrated `pca256_mixloss` office config; run dir: `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-00-11/` -> in_progress.
+- `[2026-03-12]` Repointed `prototype_npz_path` / `prototype_bridge_path` in `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py` from `/root/wjl/Talk2DINO/...` to the user-provided local assets under `data/tartanground_demo/` -> done.
+- `[2026-03-12]` Re-validated the updated office `pca256_mixloss` config in `opus-mmcv2`: `py_compile`, config parse, train-dataset sample build (`img (54, 3, 630, 630)`, `points (~5.6e5, 5)`, `views=54`), and full model build all succeeded -> done.
+- `[2026-03-12]` Launched fresh 8-GPU training for the updated local-prototype office config; active run dir: `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-12/15-43-48/` -> in_progress.
+- `[2026-03-12]` Extended `/root/wjl/Occ-3D/data_preprocess/tartanground_to_occ3d_pkl.py` so new `labels.npz` files keep legacy `mask_camera` and additionally store per-camera visibility as `mask_camera_bits` plus `camera_names` for future dynamic-view GT masking -> done.
+- `[2026-03-12]` Smoke-generated one sample to `/tmp/tg_occ3d_camvisbits_smoke/` and verified `mask_camera == (mask_camera_bits != 0)` while `semantics/mask_lidar/mask_camera` stayed identical to the old `gts_0.1` output for the same sample -> done.
+- `[2026-03-12]` Added `scripts/export_gt_viewmask_ply.py` to export a sample's GT visible voxels as 1-view / 3-view / 6-view PLYs from `mask_camera_bits`, and to copy the matching current-frame camera images into per-case folders -> done.
+- `[2026-03-12]` Ran the new GT-viewmask export on the smoke GT sample (`train.pkl` sample `0`, token `CarWelding_Data_diff_P1003_000000`) and wrote results under `demos/gt_viewmask_train_000000_CarWelding_camvisbits_smoke/` -> done.
 
 ## Validation
 - Command / Check:
+  - `/root/miniconda3/envs/opus-mmcv2/bin/python -m py_compile /root/wjl/Occ-3D/data_preprocess/tartanground_to_occ3d_pkl.py`
+  - `/root/miniconda3/envs/opus-mmcv2/bin/python /root/wjl/Occ-3D/data_preprocess/tartanground_to_occ3d_pkl.py --data-root /root/wjl/OPUS_mmcv2/data/TartanGround_Indoor --pkls train --out-root /tmp/tg_occ3d_camvisbits_smoke --seg-rgbs /root/wjl/OPUS_mmcv2/data/TartanGround_Indoor/seg_rgbs.txt --seg-label-map /mnt/data/datasets/TartanGround_unified/seg_label_map.json --target-label-map /mnt/data/datasets/TartanGround_unified/seg_label.json --pcd-template "/mnt/data/datasets/TartanGround_unified/{scene_name}/{scene_name}_sem.pcd" --num-workers 1 --chunk-size 1 --log-every 1 --vox 0.1 --limit 1`
+  - Smoke GT output check on `/tmp/tg_occ3d_camvisbits_smoke/.../labels.npz` -> new keys `mask_camera_bits` and `camera_names` present; `mask_camera == (mask_camera_bits != 0)`; old `semantics/mask_lidar/mask_camera` match the baseline sample under `gts_0.1`.
   - File existence and section sanity check.
   - `python -m py_compile models/opusv1_fusion/opus.py`
   - `python -m py_compile configs/opusv1-fusion_nusc-occ3d/tartanground_demo_r50_640x640_9f_100e_ablation_drop_lidar_feat.py`
