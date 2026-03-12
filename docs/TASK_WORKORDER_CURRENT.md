@@ -153,14 +153,15 @@
 - `[2026-03-11]` Standardized demo output location to `/root/wjl/OPUS_mmcv2/demos`; generated masked and no-mask visualization outputs for the binary-occ `epoch_130` checkpoint under that root -> done.
 - `[2026-03-11]` Generalized `/root/wjl/Talk2DINO/tartanground_label_ae` prototype export pipeline to support PCA256 office prototypes (`office79_prototypes_pca256.npz`, field `latent_256`) while keeping existing PCA128 artifacts compatible -> done.
 - `[2026-03-11]` Upgraded `models/opusv1_fusion/opus_head.py` semantic supervision from pure regression to an open-vocab-friendly mixed loss: cosine regression + prototype CE + hard-negative margin, plus weak-positive semantic supervision and tail-class feature reweighting -> done.
-- `[2026-03-11]` Added new config `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py` with `num_query=9600`, `total_epochs=100`, `context_ratio=0.5`, `feature_dims=256`, and PCA256 prototype wiring -> done.
+- `[2026-03-11]` Added the Office PCA256 mixed-loss baseline config (now tracked as `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py`) with `num_query=9600`, `total_epochs=100`, `context_ratio=0.5`, `feature_dims=256`, and PCA256 prototype wiring -> done.
 - `[2026-03-11]` CUDA smoke validation passed for the new PCA256 mixloss config: one-sample `loss()` and one-sample `predict()` both succeeded in `opus-mmcv2` -> done.
 - `[2026-03-11]` First launch of the PCA256 mixloss run failed immediately in AMP due to `hard-negative margin` using `-1e6` sentinel on `float16` tensors (`RuntimeError: value cannot be converted to type at::Half without overflow`) -> done.
 - `[2026-03-11]` Fixed the AMP overflow by replacing the hard negative sentinel with `torch.finfo(dtype).min` in `models/opusv1_fusion/opus_head.py`, re-ran CUDA smoke successfully, and relaunched 8-GPU training -> done.
-- `[2026-03-11]` Active run: `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py`; run dir: `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/` -> in_progress.
+- `[2026-03-11]` Active Office baseline source config is `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py`; the corresponding best historical run dir remains `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/` -> in_progress.
 - `[2026-03-11]` Generalized `/root/wjl/Talk2DINO/tartanground_label_ae/scripts/train_tartanground_text_ae.py` to support latent-field naming by dimension and PCA-only prototype export; added `/root/wjl/Talk2DINO/tartanground_label_ae/configs/pca256_talk2dino_reg.json` and exported `office79_prototypes_pca256.npz` with field `latent_256` -> done.
-- `[2026-03-11]` Added integrated office config `configs/opusv1-fusion_nusc-occ3d/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py` (`num_query=9600`, `100e`, `PCA256`, cosine+CE+margin mixed semantic loss, strong/weak semantic positives, `context_ratio=0.5`) -> done.
+- `[2026-03-11]` Finalized the integrated Office source baseline now stored as `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py` (`num_query=9600`, `100e`, `PCA256`, cosine+CE+margin mixed semantic loss, strong/weak semantic positives, `context_ratio=0.5`) -> done.
 - `[2026-03-11]` Launched 8-GPU run for the integrated `pca256_mixloss` office config; run dir: `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-00-11/` -> in_progress.
+- `[2026-03-12]` Declared `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py` as the canonical Office baseline source config in docs; historical long experiment names are retained only in archived run and demo paths -> done.
 
 ## Validation
 - Command / Check:
@@ -238,6 +239,7 @@
   - Remaining gap to LiDAR baseline is still significant; next isolations should target density/sampling policy and long-horizon convergence (20/40 epoch).
   - Latest completed full run snapshot before restart: `Epoch 80` validation was stable non-zero (`mIoU 26.04`, `IoU 48.72`).
   - TPV-Lite code path now compiles and passes targeted unit tests without launching full training.
+  - Canonical Office baseline source config is now `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py`; historical long names are preserved only in old run directories, frozen configs, and demo output paths.
   - Current PCA256 mixloss best checkpoint by validation `occ/mIoU` is `epoch_90.pth` from `outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/` (`mIoU=28.74`, `IoU=66.57`).
   - Free-text voxel-feature similarity export is now available through `scripts/encode_text_query_talk2dino.py` + `scripts/export_text_query_similarity_pointcloud.py` with OPUS inference in `opus-mmcv2` and text latent generation in `talk2dino`.
   - Formal `chair` demo export for `val` sample `0` was generated under `demos/text_query_similarity/val_TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_epoch_90_chair_2026-03-12_10-01-08/`.
@@ -259,7 +261,10 @@
   4. Continue opencv-convention depth run to `20/40` epochs and compare against NED and LiDAR baselines at matched epochs.
   5. Add one ablation on `sample_stride` / `max_points_total` to test depth point density impact.
   6. Default free-text visualization smoke command:
-     - `conda run -n opus-mmcv2 python scripts/export_text_query_similarity_pointcloud.py --config outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat.py --weights outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/epoch_90.pth --split val --sample-indices 0 --text-query chair --disable-camera-mask`
+     - `conda run -n opus-mmcv2 python scripts/export_text_query_similarity_pointcloud.py --config configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py --weights outputs/OPUSV1Fusion/TT_Office_mapanything_640x640_9f_100e_tpv_gt-depth_binary-occ_pca256_mixloss_flat_2026-03-11/11-08-09/epoch_90.pth --split val --sample-indices 0 --text-query chair --disable-camera-mask`
+  7. Future Office config naming:
+     - baseline: `TT_Office_baseline.py`
+     - new variants: `TT_Office_<topic>.py`
 - Questions for User:
   - None.
 - Next session read order:

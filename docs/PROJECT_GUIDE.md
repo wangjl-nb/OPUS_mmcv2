@@ -24,6 +24,17 @@ conda activate opus-mmcv2
 - `scripts/data/`: dataset metadata utility scripts (ann-file maintenance)
 - `train.py`, `val.py`: training/validation entry points
 
+## Office baseline config
+- Canonical Office baseline source config:
+  - `configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py`
+- Historical Office run/output directories may still use older long experiment names.
+  - Treat the short config above as the source-of-truth baseline and the long names as archived run labels only.
+- Recommended Office config naming going forward:
+  - baseline: `TT_Office_baseline.py`
+  - single-topic variant: `TT_Office_<topic>.py`
+  - combined variant: `TT_Office_<topic1>_<topic2>.py`
+  - Do not encode stable baseline attributes like input size, TPV, GT-depth, binary-occ, or PCA256 in new filenames unless they are the experimental variable.
+
 ## Dataset ann metadata tooling (generic)
 - Incremental depth metadata injection script:
   - `scripts/data/add_depth_paths_to_ann.py`

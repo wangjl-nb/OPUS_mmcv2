@@ -13,6 +13,8 @@ This folder centralizes all markdown documentation for fast project onboarding a
 
 - `PROJECT_GUIDE.md`
   Project architecture, code-entry mapping, current MapAnything/TPV notes, troubleshooting knowledge.
+- `../configs/opusv1-fusion_nusc-occ3d/TT_Office_baseline.py`
+  Canonical Office baseline source config for the current PCA256 mixed-loss line.
 - `INSTALL_opus_gpt.md`
   Environment setup and validation commands.
 - `TASK_WORKORDER_TEMPLATE.md`
