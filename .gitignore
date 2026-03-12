@@ -59,7 +59,6 @@ train_field_clouds
 tests
 
 demos
-TASK_WORKORDER_CURRENT.md
 mapanything
 scripts/data/export_mapanything_depth_for_tartanground.py
 
