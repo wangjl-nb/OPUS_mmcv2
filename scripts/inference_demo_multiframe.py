@@ -16,6 +16,7 @@ import numpy as np
 import torch
 import torch.backends.cudnn as cudnn
 from torch.utils.data import DataLoader, Subset
+from vis_utils import build_same_scene_history_indices, resolve_sample_indices
 
 
 def quaternion_to_matrix(quaternion):
@@ -454,6 +455,12 @@ def main():
 
     if args.history_frames < 0:
         raise ValueError('--history-frames must be >= 0')
+    if args.num_shards < 1:
+        raise ValueError('--num-shards must be >= 1')
+    if not (0 <= args.shard_id < args.num_shards):
+        raise ValueError('--shard-id must satisfy 0 <= shard_id < num_shards')
+    if args.random_sample and args.random_train_sample:
+        raise ValueError('--random-sample cannot be combined with --random-train-sample')
 
     from mmengine.registry import init_default_scope
     try:
@@ -495,53 +502,68 @@ def main():
     if hasattr(base_dataset, 'full_init'):
         base_dataset.full_init()
 
+    total_count = len(base_dataset)
+    shard_candidate_indices = list(range(args.shard_id, total_count, args.num_shards)) \
+        if args.num_shards > 1 else list(range(total_count))
+    if args.history_frames > 0 and args.num_shards > 1 and (
+            (args.sample_indices is not None and len(args.sample_indices) > 0)
+            or args.random_sample
+            or args.random_train_sample):
+        raise ValueError(
+            'history_frames>0 with explicit/random target sampling does not support sharded inference')
+
     if args.sample_indices is not None and len(args.sample_indices) > 0:
         if args.random_sample or args.random_train_sample:
             raise ValueError('--sample-indices cannot be combined with random sampling flags')
-        total_count = len(dataset)
-        indices = [i for i in args.sample_indices if 0 <= i < total_count]
-        if len(indices) == 0:
-            raise ValueError('No valid --sample-indices after bounds check.')
-        dataset = Subset(dataset, indices)
-        args.max_samples = -1
-        print(f'[MultiFrameInference] Using explicit indices: {indices}')
-    elif args.random_sample:
-        if args.random_train_sample:
-            raise ValueError('--random-sample cannot be combined with --random-train-sample')
-        if args.max_samples <= 0:
-            raise ValueError('--random-sample requires --max-samples > 0')
-        total_count = len(dataset)
-        count = min(args.max_samples, total_count)
-        if count <= 0:
-            raise ValueError('Empty dataset; cannot sample.')
-        rng = np.random.RandomState(args.seed)
-        indices = rng.choice(total_count, size=count, replace=False).tolist()
-        dataset = Subset(dataset, indices)
-        args.max_samples = count
-        print(f'[MultiFrameInference] Randomly sampled indices: {indices}')
-
-    if args.random_train_sample:
+        target_indices = resolve_sample_indices(
+            total_count=total_count,
+            max_samples=args.max_samples,
+            sample_indices=args.sample_indices,
+            random_sample=False,
+            seed=args.seed)
+        print(f'[MultiFrameInference] Using explicit target indices: {target_indices}')
+    elif args.random_train_sample:
         if args.split != 'train':
             raise ValueError('--random-train-sample can only be used with --split train')
         rng = np.random.default_rng(args.seed)
-        rand_index = int(rng.integers(0, len(dataset)))
-        print(f'[MultiFrameInference] Selected random train index: {rand_index}/{len(dataset)}')
-        dataset = Subset(dataset, [rand_index])
+        if not shard_candidate_indices:
+            raise ValueError('Empty shard candidate pool; cannot sample.')
+        rand_index = int(rng.choice(np.asarray(shard_candidate_indices, dtype=np.int64)))
+        target_indices = [rand_index]
+        print(f'[MultiFrameInference] Selected random train target index: {rand_index}/{total_count}')
         args.batch_size = 1
-        if args.max_samples < 0 or args.max_samples > 1:
-            args.max_samples = 1
+    else:
+        target_indices = resolve_sample_indices(
+            total_count=total_count,
+            max_samples=args.max_samples,
+            sample_indices=None,
+            random_sample=args.random_sample,
+            seed=args.seed,
+            candidate_indices=shard_candidate_indices)
+        if args.random_sample:
+            print(f'[MultiFrameInference] Randomly sampled target indices: {target_indices}')
+        elif args.num_shards > 1:
+            print(
+                f'[MultiFrameInference] Using shard {args.shard_id}/{args.num_shards}, '
+                f'target samples: {len(target_indices)}/{total_count}.')
 
-    if args.num_shards < 1:
-        raise ValueError('--num-shards must be >= 1')
-    if not (0 <= args.shard_id < args.num_shards):
-        raise ValueError('--shard-id must satisfy 0 <= shard_id < num_shards')
-    if args.num_shards > 1:
-        shard_indices = list(range(args.shard_id, len(dataset), args.num_shards))
-        print(
-            f'[MultiFrameInference] Using shard {args.shard_id}/{args.num_shards}, '
-            f'samples: {len(shard_indices)}/{len(dataset)}. '
-            'History is computed within this shard only.')
-        dataset = Subset(dataset, shard_indices)
+    if not target_indices:
+        raise ValueError('No target indices selected for inference.')
+
+    data_infos = get_data_infos(base_dataset)
+    if data_infos is None:
+        raise RuntimeError('Failed to access dataset infos for ego2global poses.')
+
+    context_indices, history_by_target = build_same_scene_history_indices(
+        data_infos=data_infos,
+        target_indices=target_indices,
+        history_frames=args.history_frames)
+    target_index_set = {int(i) for i in target_indices}
+    if context_indices != list(range(total_count)):
+        dataset = Subset(base_dataset, context_indices)
+    print(
+        f'[MultiFrameInference] Target samples={len(target_indices)}, '
+        f'context samples={len(context_indices)}, history_frames={args.history_frames}')
 
     sampler = DefaultSampler(dataset, shuffle=False)
     dataloader = DataLoader(
@@ -573,10 +595,6 @@ def main():
 
     scene_size = pc_range[3:] - pc_range[:3]
     voxel_shape = tuple(np.round(scene_size / voxel_size).astype(np.int64).tolist())
-
-    data_infos = get_data_infos(base_dataset)
-    if data_infos is None:
-        raise RuntimeError('Failed to access dataset infos for ego2global poses.')
 
     history_cache = deque(maxlen=args.history_frames + 1)
 
@@ -688,6 +706,10 @@ def main():
                     voxel_shape=voxel_shape,
                 )
 
+                history_source_indices = [int(hist['sample_idx']) for hist in history_cache]
+                if sample_idx not in target_index_set:
+                    continue
+
                 output_file, non_empty_voxels, saved_voxels = save_prediction(
                     winner_coords=winner_coords,
                     winner_labels=winner_labels,
@@ -709,6 +731,9 @@ def main():
                     token=token,
                     scene_name=scene_name,
                     history_window=int(len(history_cache)),
+                    history_window_actual=int(len(history_source_indices)),
+                    history_source_indices=history_source_indices,
+                    expected_history_source_indices=history_by_target.get(int(sample_idx), [int(sample_idx)]),
                     mapped_input_points=mapped_input_points,
                     non_empty_voxels=non_empty_voxels,
                     saved_voxels=saved_voxels,
@@ -716,7 +741,7 @@ def main():
                 ))
 
                 processed += 1
-                if args.max_samples > 0 and processed >= args.max_samples:
+                if processed >= len(target_index_set):
                     stop_early = True
                     break
 
@@ -739,6 +764,9 @@ def main():
         pc_range=pc_range.tolist(),
         num_shards=int(args.num_shards),
         shard_id=int(args.shard_id),
+        target_sample_indices=[int(i) for i in target_indices],
+        context_sample_indices=[int(i) for i in context_indices],
+        history_context_mode='same_scene_prev' if args.history_frames > 0 else 'none',
         processed=int(processed),
         records=records,
     )

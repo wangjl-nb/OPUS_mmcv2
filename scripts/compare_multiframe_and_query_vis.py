@@ -1,8 +1,17 @@
 #!/usr/bin/env python
 import argparse
+import ast
+import importlib
 import os.path as osp
 import subprocess
 import sys
+
+from vis_utils import (
+    TEXTSIM_VIEW_CASES,
+    maybe_force_offline_sweeps,
+    resolve_sample_indices,
+    select_dataset_cfg,
+)
 
 
 def parse_args():
@@ -22,6 +31,22 @@ def parse_args():
     parser.add_argument('--deterministic', action='store_true')
     parser.add_argument('--override', nargs='+', default=None,
                         help='Optional config overrides forwarded to both scripts.')
+    parser.add_argument('--prediction-adapter',
+                        choices=['standard', 'talk2dino_textsim'],
+                        default='standard',
+                        help='Prediction export adapter.')
+    parser.add_argument('--text-query', default=None,
+                        help='Free-form text query used by talk2dino_textsim mode.')
+    parser.add_argument('--textsim-save-dir', default=None,
+                        help='Output root for export_text_query_similarity_pointcloud.py')
+    parser.add_argument('--talk2dino-env', default='talk2dino',
+                        help='Conda env used by Talk2DINO helper.')
+    parser.add_argument('--talk2dino-config',
+                        default='/root/wjl/Talk2DINO/tartanground_label_ae/configs/pca256_talk2dino_reg.json',
+                        help='Talk2DINO latent config json.')
+    parser.add_argument('--helper-script',
+                        default=osp.join(osp.dirname(__file__), 'encode_text_query_talk2dino.py'),
+                        help='Path to Talk2DINO helper script.')
 
     parser.add_argument('--compare-save-dir', default='outputs',
                         help='Output root for compare_multiframe_frames.py')
@@ -56,6 +81,101 @@ def _extend_with_indices(cmd, indices):
         cmd += ['--sample-indices'] + [str(i) for i in indices]
 
 
+def _parse_override_list(items):
+    parsed = {}
+    for item in items or []:
+        if '=' not in item:
+            raise ValueError(f'Invalid override item: {item}')
+        key, value = item.split('=', 1)
+        try:
+            parsed[key] = ast.literal_eval(value)
+        except Exception:
+            parsed[key] = value
+    return parsed
+
+
+def _resolve_textsim_indices(args):
+    from mmengine.config import Config
+    from mmdet3d.registry import DATASETS
+    from mmdet3d.utils import register_all_modules
+    from mmengine.registry import init_default_scope
+
+    try:
+        register_all_modules(init_default_scope=True)
+    except KeyError as exc:
+        if 'LoadMultiViewImageFromFiles' not in str(exc):
+            raise
+        init_default_scope('mmdet3d')
+
+    cfg = Config.fromfile(args.config)
+    if args.override:
+        cfg.merge_from_dict(_parse_override_list(args.override))
+
+    importlib.import_module('loaders')
+    dataset_cfg = select_dataset_cfg(cfg, args.split)
+    maybe_force_offline_sweeps(dataset_cfg)
+    dataset = DATASETS.build(dataset_cfg)
+    if hasattr(dataset, 'full_init'):
+        dataset.full_init()
+
+    return resolve_sample_indices(
+        total_count=len(dataset),
+        max_samples=args.max_samples,
+        sample_indices=args.sample_indices,
+        random_sample=args.random_sample,
+        seed=args.seed,
+    )
+
+
+def _run_textsim_cases(args, script_dir):
+    if args.eval_metrics:
+        raise ValueError('talk2dino_textsim mode does not support --eval-metrics')
+    if not args.text_query:
+        raise ValueError('--text-query is required when --prediction-adapter=talk2dino_textsim')
+
+    target_indices = _resolve_textsim_indices(args)
+    if not target_indices:
+        raise ValueError('No target sample indices resolved for talk2dino_textsim mode')
+
+    textsim_save_dir = args.textsim_save_dir or args.compare_save_dir
+    textsim_script = osp.join(script_dir, 'export_text_query_similarity_pointcloud.py')
+
+    print('[Combo] Running talk2dino_textsim mode only; compare/query-vis steps are skipped.')
+    print(f'[Combo] Target sample indices: {target_indices}')
+    for view_case in TEXTSIM_VIEW_CASES:
+        case_dir = osp.join(textsim_save_dir, view_case['name'])
+        cmd = [
+            sys.executable,
+            textsim_script,
+            '--config', args.config,
+            '--weights', args.weights,
+            '--text-query', args.text_query,
+            '--save-dir', case_dir,
+            '--split', args.split,
+            '--batch-size', str(args.vis_batch_size),
+            '--num-workers', str(args.vis_num_workers),
+            '--max-voxels', str(args.max_voxels),
+            '--seed', str(args.seed),
+            '--view-case-name', view_case['name'],
+            '--num-views', str(len(view_case['cameras'])),
+            '--talk2dino-env', args.talk2dino_env,
+            '--talk2dino-config', args.talk2dino_config,
+            '--helper-script', args.helper_script,
+            '--active-cameras',
+        ] + list(view_case['cameras'])
+        _extend_with_indices(cmd, target_indices)
+        if args.deterministic:
+            cmd.append('--deterministic')
+        if args.disable_camera_mask:
+            cmd.append('--disable-camera-mask')
+        if args.override:
+            cmd += ['--override'] + args.override
+
+        print(f'[Combo] Running text-sim case {view_case["name"]}')
+        print('[Combo] Command:', ' '.join(cmd))
+        subprocess.run(cmd, check=True)
+
+
 def main():
     args = parse_args()
 
@@ -63,8 +183,16 @@ def main():
         raise ValueError('--sample-indices cannot be combined with --random-sample')
     if args.random_sample and args.max_samples <= 0:
         raise ValueError('--random-sample requires --max-samples > 0')
+    if args.num_shards < 1:
+        raise ValueError('--num-shards must be >= 1')
+    if not (0 <= args.shard_id < args.num_shards):
+        raise ValueError('--shard-id must satisfy 0 <= shard_id < num_shards')
 
     script_dir = osp.dirname(__file__)
+
+    if args.prediction_adapter == 'talk2dino_textsim':
+        _run_textsim_cases(args, script_dir)
+        return
 
     compare_script = osp.join(script_dir, 'compare_multiframe_frames.py')
     compare_cmd = [

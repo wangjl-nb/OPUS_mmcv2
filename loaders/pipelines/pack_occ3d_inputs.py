@@ -64,6 +64,9 @@ class PackOcc3DInputs:
         if 'mask_camera' in results:
             mask_camera = self._to_tensor(results['mask_camera'])
             data_sample.mask_camera = mask_camera.bool()
+        if 'mask_camera_bits' in results:
+            mask_camera_bits = self._to_tensor(results['mask_camera_bits'])
+            data_sample.mask_camera_bits = mask_camera_bits.to(dtype=torch.uint8)
         if 'mask_lidar' in results:
             mask_lidar = self._to_tensor(results['mask_lidar'])
             data_sample.mask_lidar = mask_lidar.bool()
@@ -72,6 +75,8 @@ class PackOcc3DInputs:
         for key in self.meta_keys:
             if key in results:
                 meta[key] = results[key]
+        if 'mask_camera_names' in results:
+            meta['mask_camera_names'] = copy.deepcopy(results['mask_camera_names'])
         if meta:
             data_sample.set_metainfo(meta)
 

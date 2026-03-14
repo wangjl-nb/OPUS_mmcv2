@@ -276,21 +276,23 @@ class MapAnythingOccEncoder(BaseModule):
             sliced.append(out)
         return sliced
 
-    def forward(self, img, points=None, img_metas=None, mapanything_extra=None):
+    def forward(self, img, points=None, img_metas=None, mapanything_extra=None,
+                runtime_num_views=None):
         if not isinstance(img, torch.Tensor) or img.dim() != 5:
             raise ValueError(
                 f'img must be Tensor[B, TN, C, H, W], got type={type(img)} '
                 f'shape={getattr(img, "shape", None)}')
 
-        if self.num_views <= 0:
-            raise ValueError(f'num_views must be positive, got {self.num_views}')
+        effective_num_views = self.num_views if runtime_num_views is None else int(runtime_num_views)
+        if effective_num_views <= 0:
+            raise ValueError(f'num_views must be positive, got {effective_num_views}')
 
-        expected_tn = self._expected_tn()
+        expected_tn = None if self.num_frames is None else effective_num_views * self.num_frames
         if expected_tn is not None:
             valid_tn = {expected_tn}
             # Online frame-wise extraction may feed one-frame chunks (num_views).
             if self.chunk_by_frame:
-                valid_tn.add(self.num_views)
+                valid_tn.add(effective_num_views)
             if img.shape[1] not in valid_tn:
                 img = self._align_tn_img(img, expected_tn)
                 img_metas = self._align_img_metas(img_metas, expected_tn)
@@ -307,9 +309,9 @@ class MapAnythingOccEncoder(BaseModule):
                     f'mapanything_extra must be None/dict or list with length B={batch_size}, '
                     f'got type={type(mapanything_extra)} len={len(mapanything_extra) if isinstance(mapanything_extra, list) else "N/A"}')
 
-        if total_views % self.num_views != 0:
+        if total_views % effective_num_views != 0:
             raise ValueError(
-                f'TN mismatch: total views {total_views} is not divisible by num_views {self.num_views}')
+                f'TN mismatch: total views {total_views} is not divisible by num_views {effective_num_views}')
 
         if img_metas is None:
             img_metas = [{} for _ in range(batch_size)]
@@ -320,10 +322,10 @@ class MapAnythingOccEncoder(BaseModule):
         if self.chunk_by_frame:
             feats = []
             multi_level_feats = None
-            num_frames = total_views // self.num_views
+            num_frames = total_views // effective_num_views
             for frame_idx in range(num_frames):
-                start = frame_idx * self.num_views
-                end = start + self.num_views
+                start = frame_idx * effective_num_views
+                end = start + effective_num_views
                 chunk_img = img[:, start:end]
                 chunk_metas = self._slice_img_metas(img_metas, start, end, total_views)
                 chunk_extra = self._slice_mapanything_extra(mapanything_extra, start, end)
@@ -340,17 +342,17 @@ class MapAnythingOccEncoder(BaseModule):
                             f'Wrapper chunk level count mismatch at frame {frame_idx}: '
                             f'expected {len(multi_level_feats)}, got {len(chunk_feat)}')
                     for lvl, lvl_feat in enumerate(chunk_feat):
-                        if self.strict_shapes and lvl_feat.shape[:2] != (batch_size, self.num_views):
+                        if self.strict_shapes and lvl_feat.shape[:2] != (batch_size, effective_num_views):
                             raise ValueError(
                                 f'Wrapper chunk output shape mismatch at frame {frame_idx}, level {lvl}: '
-                                f'expected [B={batch_size}, TN_chunk={self.num_views}, ...], '
+                                f'expected [B={batch_size}, TN_chunk={effective_num_views}, ...], '
                                 f'got {tuple(lvl_feat.shape)}')
                         multi_level_feats[lvl].append(lvl_feat)
                 else:
-                    if self.strict_shapes and chunk_feat.shape[:2] != (batch_size, self.num_views):
+                    if self.strict_shapes and chunk_feat.shape[:2] != (batch_size, effective_num_views):
                         raise ValueError(
                             f'Wrapper chunk output shape mismatch at frame {frame_idx}: '
-                            f'expected [B={batch_size}, TN_chunk={self.num_views}, ...], '
+                            f'expected [B={batch_size}, TN_chunk={effective_num_views}, ...], '
                             f'got {tuple(chunk_feat.shape)}')
                     feats.append(chunk_feat)
             if multi_level_feats is not None:

@@ -9,14 +9,14 @@ custom_imports = dict(
 # -------------------- Dataset Paths --------------------
 dataset_type = 'TartangroundOcc3DDataset'  # Dataset class for Tartanground occupancy data.
 dataset_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/'  # Root for split pkl files and metadata.
-occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts/'  # Root for occupancy label npz files.
+occ_root = '/root/wjl/OPUS_mmcv2/data/tartanground_demo/gts_camvisbits/'  # Root for occupancy label npz files.
 
 
 # -------------------- Experiment Knobs --------------------
 point_input_source = 'depth'  # Use multi-view depth to build pseudo point clouds.
 eval_score_thr = 0.1  # Keep a low binary-occ threshold for query/voxel gating.
 val_interval = 10  # Run validation every N epochs.
-total_epochs = 100  # Train for 100 epochs.
+total_epochs = 150  # Train for 150 epochs.
 
 # Use GT-depth split files (depth_gt setting).
 ann_pkl_suffix = '_with_depth'  # train_with_depth.pkl / val_with_depth.pkl / test_with_depth.pkl
@@ -72,15 +72,19 @@ cls_weights = [
 point_cloud_range = [-20.0, -20.0, -3.0, 20.0, 20.0, 5.0]  # [x_min, y_min, z_min, x_max, y_max, z_max]
 pc_voxel_size = [0.05, 0.05, 0.05]  # Point-branch voxelization size.
 voxel_size = [0.05, 0.05, 0.05]  # Occupancy voxel size for head/evaluator.
+side_cam_types = ['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_RIGHT']  # Side-view camera pool used in all stages.
 
 dataset_cfg = dict(
-    cam_types=['CAM_LEFT', 'CAM_BACK', 'CAM_FRONT', 'CAM_BOTTOM', 'CAM_TOP', 'CAM_RIGHT'],  # Camera order.
-    num_views=input_modality.get('num_cams', 6),  # Number of camera views.
+    cam_types=side_cam_types,  # Camera order.
+    num_views=input_modality.get('num_cams', len(side_cam_types)),  # Number of camera views.
     occ_io=dict(
         path_template='{scene_name}/{token}/labels.npz',  # Relative path format under occ_root.
         semantics_key='semantics',  # Semantic volume key in npz.
         mask_camera_key='mask_camera',  # Camera visibility mask key.
         mask_lidar_key='mask_lidar',  # LiDAR visibility mask key.
+        mask_camera_bits_key='mask_camera_bits',  # Per-camera visibility bitfield key.
+        camera_names_key='camera_names',  # Camera-name order key for the bitfield.
+        mask_camera_select_names=side_cam_types,  # All-stage visible-region mask uses side cameras only.
     ),
     class_names=occ_names + ['free'],  # Full occupancy class names.
     empty_label=len(occ_names),  # Index of free-space class.
@@ -116,8 +120,18 @@ query_init_mix_cfg = dict(
     random_mode='uniform_pc_range',  # Uniform random in point cloud range.
 )
 
-prototype_npz_path = '/root/wjl/Talk2DINO/tartanground_label_ae/artifacts/office79_prototypes_pca256.npz'  # Office-79 PCA256 prototype dictionary.
-prototype_bridge_path = '/root/wjl/Talk2DINO/tartanground_label_ae/vocab/office79_bridge.json'  # Office raw-name to prototype row order bridge.
+train_view_dropout_cfg = dict(
+    enabled=True,  # Enable dynamic current-frame-driven camera subset training.
+    keep_count_range=[1, 4],  # Randomly keep 1-4 side cameras per batch.
+    mode='batch_shared',  # One subset is shared across the whole batch.
+    same_subset_across_frames=True,  # Reuse the current-frame subset for all history frames.
+    camera_pool=side_cam_types,  # Candidate cameras.
+    fallback_to_all_if_empty_points=True,  # Keep training stable if depth-point filtering empties a sample.
+    max_resample_attempts=8,  # Retry random subsets before falling back to all 4 cameras.
+)
+
+prototype_npz_path = f'{dataset_root}office79_prototypes_pca256.npz'  # Office-79 PCA256 prototype dictionary.
+prototype_bridge_path = f'{dataset_root}office79_bridge.json'  # Office raw-name to prototype row order bridge.
 occ_out_channels = 1  # Binary occupied/not-occupied score output channels.
 
 
@@ -156,7 +170,7 @@ img_encoder = dict(
         checkpoint_path='/root/wjl/OPUS_mmcv2/third_party/anyup/checkpoints/anyup_multi_backbone.pth',  # AnyUp checkpoint path.
         allow_online_download_if_missing=False,  # Disallow online fallback download by default.
         q_chunk_size=64,  # Query chunk size for AnyUp runtime.
-        view_batch_size=6,  # Per-step view batch size.
+        view_batch_size=4,  # Per-step view batch size.
         output_in_channels=1024,  # Raw MapAnything feature channels before projection.
         output_channels=256,  # Project bilinear pyramid levels to OPUS embed dims.
         upsample_output_divisor=4,  # Upsample raw features before building the pyramid.
@@ -248,6 +262,7 @@ model = dict(
         img_pad_cfg=dict(size_divisor=14),  # Pad to transformer patch divisor.
     ),
     stop_prev_grad=0,  # Temporal gradient stop strategy.
+    train_view_dropout=train_view_dropout_cfg,  # Batch-shared dynamic side-camera training.
     use_external_img_encoder=True,  # Consume MapAnything encoder output directly.
 
     # Branch switches (TPV on, pure point-only branch off).
@@ -432,6 +447,7 @@ depth_points_cfg = dict(
     time_dim=4,  # Time index in point feature.
     strict_depth_exist=True,  # Require depth source presence.
     fallback_depth_from_image_path=True,  # Allow derived depth path fallback.
+    output_view_ids_key='depth_point_view_ids',  # Track which TN slot generated each depth point.
 )
 
 point_load_transforms = [depth_points_cfg]  # This run uses depth-derived points only.
@@ -474,16 +490,19 @@ train_pipeline = [
         semantics_key=dataset_cfg['occ_io']['semantics_key'],
         mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
         mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+        mask_camera_bits_key=dataset_cfg['occ_io']['mask_camera_bits_key'],
+        camera_names_key=dataset_cfg['occ_io']['camera_names_key'],
+        mask_camera_select_names=dataset_cfg['occ_io']['mask_camera_select_names'],
         class_names=dataset_cfg['class_names'],
         empty_label=dataset_cfg['empty_label'],
     ),  # Load occupancy GT for training.
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=True),  # Image augmentation.
     mapanything_extra_loader,  # Inject mapanything_extra before range filtering.
-    dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),  # Clip points to scene range.
+    dict(type='PointsRangeFilterWithViewIds', point_cloud_range=point_cloud_range),  # Clip points to scene range and keep view ids aligned.
     dict(
         type='PackOcc3DInputs',
         meta_keys=pack_meta_keys,
-        extra_input_keys=('mapanything_extra',),
+        extra_input_keys=('mapanything_extra', 'depth_point_view_ids'),
     ),  # Pack regular inputs + mapanything_extra.
 ]
 
@@ -506,11 +525,11 @@ test_pipeline = [
     dict(type='LiDARToOccSpace'),  # Convert points into occupancy coordinate system.
     dict(type='RandomTransformImage', ida_aug_conf=ida_aug_conf, training=False),  # Deterministic eval transform.
     mapanything_extra_loader,  # Inject mapanything_extra for val/test too.
-    dict(type='PointsRangeFilter', point_cloud_range=point_cloud_range),  # Clip points to scene range.
+    dict(type='PointsRangeFilterWithViewIds', point_cloud_range=point_cloud_range),  # Clip points to scene range and keep view ids aligned.
     dict(
         type='PackOcc3DInputs',
         meta_keys=pack_meta_keys,
-        extra_input_keys=('mapanything_extra',),
+        extra_input_keys=('mapanything_extra', 'depth_point_view_ids'),
     ),  # Pack regular inputs + mapanything_extra.
 ]
 
@@ -634,6 +653,9 @@ val_evaluator = dict(
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
     mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
     mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    mask_camera_bits_key=dataset_cfg['occ_io']['mask_camera_bits_key'],
+    camera_names_key=dataset_cfg['occ_io']['camera_names_key'],
+    mask_camera_select_names=dataset_cfg['occ_io']['mask_camera_select_names'],
     empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     pc_range=dataset_cfg['pc_range'],
@@ -660,6 +682,9 @@ test_evaluator = dict(
     semantics_key=dataset_cfg['occ_io']['semantics_key'],
     mask_camera_key=dataset_cfg['occ_io']['mask_camera_key'],
     mask_lidar_key=dataset_cfg['occ_io']['mask_lidar_key'],
+    mask_camera_bits_key=dataset_cfg['occ_io']['mask_camera_bits_key'],
+    camera_names_key=dataset_cfg['occ_io']['camera_names_key'],
+    mask_camera_select_names=dataset_cfg['occ_io']['mask_camera_select_names'],
     empty_label=dataset_cfg['empty_label'],
     use_camera_mask=True,
     pc_range=dataset_cfg['pc_range'],

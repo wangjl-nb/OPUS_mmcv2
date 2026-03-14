@@ -28,6 +28,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                  use_grid_mask=True,
                  data_aug=None,
                  stop_prev_grad=0,
+                 train_view_dropout=None,
                  drop_lidar_feat=False,
                  pts_voxel_layer=None,
                  pts_voxel_encoder=None,
@@ -177,6 +178,7 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         self.drop_lidar_feat = bool(drop_lidar_feat)
         self.data_aug = data_aug
         self.stop_prev_grad = stop_prev_grad
+        self.train_view_dropout = copy.deepcopy(train_view_dropout) if train_view_dropout else {}
         self.color_aug = GpuPhotoMetricDistortion()
         self.grid_mask = GridMask(ratio=0.5, prob=0.7)
         self.use_grid_mask = use_grid_mask
@@ -303,7 +305,350 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             normalized.append(pts)
         return normalized
 
-    def _run_external_img_encoder(self, img, points, img_metas, mapanything_extra=None):
+    @staticmethod
+    def _normalize_img_batch_input(img):
+        if img is None:
+            return None
+        if isinstance(img, torch.Tensor):
+            return img
+        if isinstance(img, tuple):
+            img = list(img)
+        if isinstance(img, list):
+            tensors = []
+            for item in img:
+                if isinstance(item, np.ndarray):
+                    item = torch.from_numpy(item)
+                if not isinstance(item, torch.Tensor):
+                    raise TypeError(
+                        f'Unsupported image batch item type: {type(item)}')
+                tensors.append(item)
+            if not tensors:
+                raise ValueError('Empty image batch list is not supported')
+            return torch.stack(tensors, dim=0)
+        raise TypeError(f'Unsupported image batch type: {type(img)}')
+
+    def _normalize_view_id_list(self, view_ids, batch_size):
+        if view_ids is None:
+            return None
+        if isinstance(view_ids, torch.Tensor):
+            if view_ids.dim() == 1 and batch_size == 1:
+                return [view_ids]
+            if view_ids.dim() == 2 and view_ids.shape[0] == batch_size:
+                return [view_ids[i] for i in range(batch_size)]
+            raise TypeError(
+                f'depth_point_view_ids tensor must have shape [N] or [B, N], got {tuple(view_ids.shape)}')
+        if isinstance(view_ids, np.ndarray):
+            if view_ids.ndim == 1 and batch_size == 1:
+                return [torch.from_numpy(view_ids)]
+            if view_ids.ndim == 2 and view_ids.shape[0] == batch_size:
+                return [torch.from_numpy(view_ids[i]) for i in range(batch_size)]
+            raise TypeError(
+                f'depth_point_view_ids ndarray must have shape [N] or [B, N], got {view_ids.shape}')
+        if isinstance(view_ids, tuple):
+            view_ids = list(view_ids)
+        if not isinstance(view_ids, list):
+            raise TypeError(
+                f'depth_point_view_ids must be Tensor/ndarray/list, got {type(view_ids)}')
+        if len(view_ids) != batch_size:
+            raise ValueError(
+                f'depth_point_view_ids batch size mismatch: got {len(view_ids)}, expected {batch_size}')
+        normalized = []
+        for item in view_ids:
+            if isinstance(item, np.ndarray):
+                item = torch.from_numpy(item)
+            elif not isinstance(item, torch.Tensor):
+                item = torch.as_tensor(item)
+            normalized.append(item.long())
+        return normalized
+
+    @staticmethod
+    def _slice_meta_value_by_indices(value, indices, total_views):
+        if isinstance(value, list) and len(value) == total_views:
+            return [copy.deepcopy(value[idx]) for idx in indices]
+        if isinstance(value, tuple) and len(value) == total_views:
+            return tuple(copy.deepcopy(value[idx]) for idx in indices)
+        if isinstance(value, np.ndarray) and value.ndim > 0 and value.shape[0] == total_views:
+            return np.array(value[indices], copy=True)
+        if isinstance(value, torch.Tensor) and value.dim() > 0 and value.shape[0] == total_views:
+            return value[indices]
+        return copy.deepcopy(value)
+
+    def _gather_img_metas_by_indices(self, img_metas, indices, total_views):
+        gathered = []
+        indices_list = [int(i) for i in indices]
+        for meta in img_metas:
+            if not isinstance(meta, dict):
+                gathered.append(meta)
+                continue
+            gathered_meta = {}
+            for key, value in meta.items():
+                gathered_meta[key] = self._slice_meta_value_by_indices(
+                    value, indices_list, total_views)
+            gathered.append(gathered_meta)
+        return gathered
+
+    def _mask_inactive_ego2img(self, img_metas, total_views, active_indices,
+                               kept_camera_ids, kept_camera_names):
+        active_indices = {int(idx) for idx in active_indices}
+        masked = []
+        for meta in img_metas:
+            if not isinstance(meta, dict):
+                masked.append(meta)
+                continue
+            out = copy.deepcopy(meta)
+            ego2img = out.get('ego2img', None)
+            if isinstance(ego2img, list) and len(ego2img) == total_views:
+                zero = np.zeros((4, 4), dtype=np.float32)
+                new_ego2img = []
+                for idx, item in enumerate(ego2img):
+                    if idx in active_indices:
+                        new_ego2img.append(np.asarray(item, dtype=np.float32))
+                    else:
+                        new_ego2img.append(zero.copy())
+                out['ego2img'] = new_ego2img
+            out['dynamic_view_keep_ids'] = [int(x) for x in kept_camera_ids]
+            out['dynamic_view_keep_names'] = list(kept_camera_names)
+            masked.append(out)
+        return masked
+
+    @staticmethod
+    def _gather_mapanything_extra_by_indices(mapanything_extra, indices):
+        if mapanything_extra is None:
+            return None
+        indices_list = [int(i) for i in indices]
+        gathered = []
+        for item in mapanything_extra:
+            if item is None:
+                gathered.append(None)
+                continue
+            out = copy.deepcopy(item)
+            if 'views' in out and isinstance(out['views'], (list, tuple)):
+                out['views'] = [copy.deepcopy(out['views'][idx]) for idx in indices_list]
+            gathered.append(out)
+        return gathered
+
+    @staticmethod
+    def _scatter_img_feats_to_full_views(img_feats, active_indices, full_total_views):
+        scattered = []
+        for feat in img_feats:
+            if not isinstance(feat, torch.Tensor) or feat.dim() != 5:
+                raise TypeError(
+                    f'Image feature must be Tensor[B, TN, C, H, W], got {type(feat)} '
+                    f'shape={getattr(feat, "shape", None)}')
+            B, _, C, H, W = feat.shape
+            feat_active_indices = torch.as_tensor(
+                active_indices, dtype=torch.long, device=feat.device)
+            full = feat.new_zeros((B, full_total_views, C, H, W))
+            full[:, feat_active_indices] = feat
+            scattered.append(full)
+        return scattered
+
+    @staticmethod
+    def _points_non_empty(points):
+        if points is None:
+            return True
+        return all(pts is not None and pts.shape[0] > 0 for pts in points)
+
+    def _mask_has_non_empty_gt(self, voxel_semantics, mask_camera):
+        if voxel_semantics is None or mask_camera is None:
+            return True
+        empty_label = int(getattr(getattr(self, 'pts_bbox_head', None), 'empty_label', -1))
+        if empty_label < 0:
+            return True
+        visible_non_empty = (voxel_semantics.long() != empty_label) & mask_camera.bool()
+        if visible_non_empty.dim() <= 1:
+            return bool(visible_non_empty.any().item())
+        valid_per_sample = visible_non_empty.reshape(visible_non_empty.shape[0], -1).any(dim=1)
+        return bool(valid_per_sample.all().item())
+
+    @staticmethod
+    def _filter_points_by_view_ids(points, point_view_ids, active_indices):
+        if points is None:
+            return None
+        if point_view_ids is None:
+            raise ValueError('depth_point_view_ids are required when train_view_dropout is enabled')
+        active_indices = active_indices.to(dtype=torch.long)
+        filtered_points = []
+        for pts, view_ids in zip(points, point_view_ids):
+            pts = pts if isinstance(pts, torch.Tensor) else torch.as_tensor(pts)
+            view_ids = view_ids.to(device=pts.device, dtype=torch.long)
+            mask = (view_ids[:, None] == active_indices[None, :].to(device=pts.device)).any(dim=1)
+            filtered_points.append(pts[mask])
+        return filtered_points
+
+    @staticmethod
+    def _build_mask_from_bits(mask_camera_bits, camera_names, selected_names):
+        bitmask = 0
+        selected_names = set(selected_names)
+        for cam_idx, cam_name in enumerate(camera_names):
+            if cam_name in selected_names:
+                bitmask |= (1 << cam_idx)
+        return (mask_camera_bits.to(dtype=torch.int64) & bitmask) != 0
+
+    def _rebuild_mask_camera_from_bits(self, mask_camera_bits, mask_camera_names, kept_camera_names):
+        rebuilt = []
+        for bits, names in zip(mask_camera_bits, mask_camera_names):
+            if names is None:
+                raise ValueError(
+                    'mask_camera_names metadata is required when train_view_dropout is enabled')
+            rebuilt.append(self._build_mask_from_bits(bits, names, kept_camera_names))
+        return torch.stack(rebuilt, dim=0)
+
+    def _sample_kept_camera_ids(self, base_num_views, device):
+        cfg = self.train_view_dropout or {}
+        min_keep, max_keep = cfg.get('keep_count_range', [1, base_num_views])
+        min_keep = max(1, min(int(min_keep), base_num_views))
+        max_keep = max(min_keep, min(int(max_keep), base_num_views))
+        keep_count = int(torch.randint(min_keep, max_keep + 1, (1,), device=device).item())
+        kept = torch.randperm(base_num_views, device=device)[:keep_count]
+        kept, _ = torch.sort(kept)
+        return kept
+
+    @staticmethod
+    def _expand_active_tn_indices(kept_camera_ids, base_num_views, num_frames):
+        chunks = []
+        for frame_idx in range(num_frames):
+            chunks.append(kept_camera_ids + frame_idx * base_num_views)
+        return torch.cat(chunks, dim=0)
+
+    def _prepare_train_view_dropout(self,
+                                    img,
+                                    points,
+                                    depth_point_view_ids,
+                                    mapanything_extra,
+                                    img_metas,
+                                    voxel_semantics,
+                                    mask_camera,
+                                    mask_camera_bits,
+                                    mask_camera_names):
+        cfg = self.train_view_dropout or {}
+        if (not self.training) or (not cfg.get('enabled', False)):
+            return dict(
+                img=img,
+                points=points,
+                mapanything_extra=mapanything_extra,
+                encoder_img_metas=img_metas,
+                head_img_metas=img_metas,
+                runtime_num_views=None,
+                mask_camera=mask_camera,
+                active_tn_indices=None,
+                kept_camera_ids=None,
+                kept_camera_names=None,
+            )
+
+        if not self.use_external_img_encoder:
+            raise ValueError('train_view_dropout currently requires use_external_img_encoder=True')
+        if mask_camera_bits is None:
+            raise ValueError(
+                'train_view_dropout requires GT files to provide mask_camera_bits '
+                '(load them via LoadOcc3DFromFile)')
+        if not isinstance(img, torch.Tensor) or img.dim() != 5:
+            raise TypeError(
+                f'train_view_dropout expects img Tensor[B, TN, C, H, W], got {type(img)} '
+                f'shape={getattr(img, "shape", None)}')
+
+        B, total_views = img.shape[:2]
+        base_num_views = self._get_num_views()
+        if total_views % base_num_views != 0:
+            raise ValueError(
+                f'train_view_dropout expects TN divisible by num_views={base_num_views}, got TN={total_views}')
+        num_frames = total_views // base_num_views
+        camera_pool = list(cfg.get('camera_pool', [f'CAM_{i}' for i in range(base_num_views)]))
+        if len(camera_pool) != base_num_views:
+            raise ValueError(
+                f'train_view_dropout.camera_pool length mismatch: expected {base_num_views}, got {len(camera_pool)}')
+
+        points_list = self._normalize_points_list(points)
+        view_id_list = self._normalize_view_id_list(depth_point_view_ids, B) if points_list is not None else None
+
+        max_attempts = int(cfg.get('max_resample_attempts', 8))
+        fallback_to_all = bool(cfg.get('fallback_to_all_if_empty_points', True))
+        kept_camera_ids = None
+        active_tn_indices = None
+        filtered_points = points_list
+        effective_mask_camera = mask_camera
+        attempts_used = 0
+        rejected_empty_points = 0
+        rejected_empty_gt = 0
+        fallback_used = False
+        for _ in range(max_attempts):
+            attempts_used += 1
+            kept_camera_ids = self._sample_kept_camera_ids(base_num_views, img.device)
+            active_tn_indices = self._expand_active_tn_indices(
+                kept_camera_ids, base_num_views=base_num_views, num_frames=num_frames)
+            filtered_points = self._filter_points_by_view_ids(
+                points_list,
+                view_id_list,
+                active_tn_indices) if points_list is not None else None
+            candidate_mask_camera = mask_camera
+            if mask_camera_bits is not None:
+                candidate_mask_camera = self._rebuild_mask_camera_from_bits(
+                    mask_camera_bits,
+                    mask_camera_names,
+                    [camera_pool[int(idx)] for idx in kept_camera_ids.tolist()])
+            points_ok = self._points_non_empty(filtered_points)
+            gt_ok = self._mask_has_non_empty_gt(voxel_semantics, candidate_mask_camera)
+            if not points_ok:
+                rejected_empty_points += 1
+            if not gt_ok:
+                rejected_empty_gt += 1
+            if points_ok and gt_ok:
+                effective_mask_camera = candidate_mask_camera
+                break
+        else:
+            if not fallback_to_all:
+                raise FloatingPointError(
+                    'train_view_dropout could not find a valid camera subset with non-empty '
+                    'points and GT; set fallback_to_all_if_empty_points=True or relax keep_count_range')
+            fallback_used = True
+            kept_camera_ids = torch.arange(base_num_views, device=img.device, dtype=torch.long)
+            active_tn_indices = self._expand_active_tn_indices(
+                kept_camera_ids, base_num_views=base_num_views, num_frames=num_frames)
+            filtered_points = self._filter_points_by_view_ids(
+                points_list,
+                view_id_list,
+                active_tn_indices) if points_list is not None else None
+            effective_mask_camera = mask_camera
+            if mask_camera_bits is not None:
+                effective_mask_camera = self._rebuild_mask_camera_from_bits(
+                    mask_camera_bits,
+                    mask_camera_names,
+                    [camera_pool[int(idx)] for idx in kept_camera_ids.tolist()])
+
+        kept_camera_names = [camera_pool[int(idx)] for idx in kept_camera_ids.tolist()]
+        encoder_img = img.index_select(1, active_tn_indices.to(dtype=torch.long))
+        encoder_img_metas = self._gather_img_metas_by_indices(
+            img_metas, active_tn_indices.tolist(), total_views)
+        encoder_mapanything_extra = self._gather_mapanything_extra_by_indices(
+            mapanything_extra, active_tn_indices.tolist())
+        head_img_metas = self._mask_inactive_ego2img(
+            img_metas,
+            total_views=total_views,
+            active_indices=active_tn_indices.tolist(),
+            kept_camera_ids=kept_camera_ids.tolist(),
+            kept_camera_names=kept_camera_names)
+
+        return dict(
+            img=encoder_img,
+            points=filtered_points,
+            mapanything_extra=encoder_mapanything_extra,
+            encoder_img_metas=encoder_img_metas,
+            head_img_metas=head_img_metas,
+            runtime_num_views=int(kept_camera_ids.numel()),
+            mask_camera=effective_mask_camera,
+            active_tn_indices=active_tn_indices,
+            kept_camera_ids=kept_camera_ids,
+            kept_camera_names=kept_camera_names,
+            full_total_views=total_views,
+            view_dropout_keep_count=int(kept_camera_ids.numel()),
+            view_dropout_attempts=attempts_used,
+            view_dropout_fallback=int(fallback_used),
+            view_dropout_reject_empty_points=rejected_empty_points,
+            view_dropout_reject_empty_gt=rejected_empty_gt,
+        )
+
+    def _run_external_img_encoder(self, img, points, img_metas, mapanything_extra=None,
+                                  runtime_num_views=None):
         points = self._normalize_points_list(points)
         if self._freeze_img_encoder:
             with torch.no_grad():
@@ -311,19 +656,23 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                     img,
                     points=points,
                     img_metas=img_metas,
-                    mapanything_extra=mapanything_extra)
+                    mapanything_extra=mapanything_extra,
+                    runtime_num_views=runtime_num_views)
         return self.img_encoder(
             img,
             points=points,
             img_metas=img_metas,
-            mapanything_extra=mapanything_extra)
+            mapanything_extra=mapanything_extra,
+            runtime_num_views=runtime_num_views)
 
-    def _extract_external_img_feat_tensor(self, img, points, img_metas, mapanything_extra=None):
+    def _extract_external_img_feat_tensor(self, img, points, img_metas, mapanything_extra=None,
+                                          runtime_num_views=None):
         img_feats = self._run_external_img_encoder(
             img,
             points=points,
             img_metas=img_metas,
-            mapanything_extra=mapanything_extra)
+            mapanything_extra=mapanything_extra,
+            runtime_num_views=runtime_num_views)
         if isinstance(img_feats, (list, tuple)):
             if len(img_feats) == 1 and isinstance(img_feats[0], torch.Tensor):
                 img_feats = img_feats[0]
@@ -337,12 +686,14 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 f"but got type={type(img_feats)} shape={getattr(img_feats, 'shape', None)}")
         return img_feats
 
-    def _extract_external_img_feat(self, img, points, img_metas, mapanything_extra=None):
+    def _extract_external_img_feat(self, img, points, img_metas, mapanything_extra=None,
+                                   runtime_num_views=None):
         img_feats = self._run_external_img_encoder(
             img,
             points=points,
             img_metas=img_metas,
-            mapanything_extra=mapanything_extra)
+            mapanything_extra=mapanything_extra,
+            runtime_num_views=runtime_num_views)
 
         if isinstance(img_feats, (list, tuple)):
             if len(img_feats) == 1 and isinstance(img_feats[0], torch.Tensor):
@@ -537,7 +888,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
         return img_feats
 
-    def extract_img_feat(self, img, img_metas, points=None, mapanything_extra=None):
+    def extract_img_feat(self, img, img_metas, points=None, mapanything_extra=None,
+                         runtime_num_views=None):
         if isinstance(img, list):
             img = torch.stack(img, dim=0)
 
@@ -549,7 +901,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 img_for_external,
                 points=points,
                 img_metas=img_metas,
-                mapanything_extra=mapanything_extra)
+                mapanything_extra=mapanything_extra,
+                runtime_num_views=runtime_num_views)
 
         B, N, C, H, W = img.size()
         img = img.view(B * N, C, H, W)
@@ -621,7 +974,8 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 img_for_external,
                 points=points,
                 img_metas=img_metas,
-                mapanything_extra=mapanything_extra)
+                mapanything_extra=mapanything_extra,
+                runtime_num_views=runtime_num_views)
             img_feats_reshaped = self._fuse_img_features(img_feats_reshaped, external_feat)
 
         return img_feats_reshaped
@@ -646,12 +1000,15 @@ class OPUSV1Fusion(MVXTwoStageDetector):
 
     def _forward(self, inputs, data_samples=None):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
+        img = self._normalize_img_batch_input(img)
         img_metas = self._collect_img_metas(data_samples)
         return self.extract_feat(img, img_metas)
 
     def loss(self, inputs, data_samples):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
+        img = self._normalize_img_batch_input(img)
         points = inputs.get('points') if isinstance(inputs, dict) else None
+        depth_point_view_ids = inputs.get('depth_point_view_ids') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
         if isinstance(img, torch.Tensor) and img.dim() >= 1:
             mapanything_extra = self._normalize_mapanything_extra(
@@ -659,6 +1016,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         img_metas = self._collect_img_metas(data_samples)
         voxel_semantics = self._stack_data_samples(data_samples, 'voxel_semantics')
         mask_camera = self._stack_data_samples(data_samples, 'mask_camera')
+        mask_camera_bits = self._stack_data_samples(data_samples, 'mask_camera_bits')
+        mask_camera_names = [sample.metainfo.get('mask_camera_names', None) for sample in data_samples] \
+            if data_samples else []
         debug_is_finite('input.img', img)
         debug_is_finite('input.points', points)
         debug_is_finite('input.voxel_semantics', voxel_semantics)
@@ -671,17 +1031,31 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                     debug_is_finite(f'img_metas[{i}].ego2occ', np.asarray(meta['ego2occ']))
                 if 'ego2lidar' in meta:
                     debug_is_finite(f'img_metas[{i}].ego2lidar', np.asarray(meta['ego2lidar']))
-        return self.forward_train(
+        view_dropout_state = self._prepare_train_view_dropout(
             img=img,
             points=points,
+            depth_point_view_ids=depth_point_view_ids,
             mapanything_extra=mapanything_extra,
             img_metas=img_metas,
             voxel_semantics=voxel_semantics,
             mask_camera=mask_camera,
+            mask_camera_bits=mask_camera_bits,
+            mask_camera_names=mask_camera_names)
+        return self.forward_train(
+            img=view_dropout_state['img'],
+            points=view_dropout_state['points'],
+            mapanything_extra=view_dropout_state['mapanything_extra'],
+            img_metas=view_dropout_state['head_img_metas'],
+            encoder_img_metas=view_dropout_state['encoder_img_metas'],
+            runtime_num_views=view_dropout_state['runtime_num_views'],
+            view_dropout_state=view_dropout_state,
+            voxel_semantics=voxel_semantics,
+            mask_camera=view_dropout_state['mask_camera'],
         )
 
     def predict(self, inputs, data_samples, rescale=False):
         img = inputs.get('img') if isinstance(inputs, dict) else inputs
+        img = self._normalize_img_batch_input(img)
         points = inputs.get('points') if isinstance(inputs, dict) else None
         mapanything_extra = inputs.get('mapanything_extra') if isinstance(inputs, dict) else None
         if isinstance(img, torch.Tensor) and img.dim() >= 1:
@@ -695,6 +1069,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                       points=None,
                       mapanything_extra=None,
                       img_metas=None,
+                      encoder_img_metas=None,
+                      runtime_num_views=None,
+                      view_dropout_state=None,
                       gt_bboxes_3d=None,
                       gt_labels_3d=None,
                       gt_labels=None,
@@ -734,10 +1111,17 @@ class OPUSV1Fusion(MVXTwoStageDetector):
                 mapanything_extra, batch_size=int(img.shape[0]))
         img_feats = self.extract_img_feat(
             img,
-            img_metas,
+            encoder_img_metas if encoder_img_metas is not None else img_metas,
             points=points,
-            mapanything_extra=mapanything_extra) \
+            mapanything_extra=mapanything_extra,
+            runtime_num_views=runtime_num_views) \
             if self._need_img_branch() else None
+        if img_feats is not None and view_dropout_state is not None \
+                and view_dropout_state.get('active_tn_indices', None) is not None:
+            img_feats = self._scatter_img_feats_to_full_views(
+                img_feats,
+                active_indices=view_dropout_state['active_tn_indices'],
+                full_total_views=view_dropout_state['full_total_views'])
         pts_feats = self._extract_pts_feat_for_head(points)
         tpv_feats = self._extract_tpv_feat_for_head(points)
         if pts_feats is not None:
@@ -753,6 +1137,23 @@ class OPUSV1Fusion(MVXTwoStageDetector):
             mask_camera = torch.ones_like(voxel_semantics)
         loss_inputs = [voxel_semantics, mask_camera, outs]
         losses = self.pts_bbox_head.loss(*loss_inputs)
+        if view_dropout_state is not None and view_dropout_state.get('kept_camera_ids', None) is not None:
+            stat_device = voxel_semantics.device if isinstance(voxel_semantics, torch.Tensor) else img.device
+            losses['train_view_dropout_keep_count'] = torch.tensor(
+                float(view_dropout_state.get('view_dropout_keep_count', 0)),
+                device=stat_device)
+            losses['train_view_dropout_attempts'] = torch.tensor(
+                float(view_dropout_state.get('view_dropout_attempts', 0)),
+                device=stat_device)
+            losses['train_view_dropout_fallback'] = torch.tensor(
+                float(view_dropout_state.get('view_dropout_fallback', 0)),
+                device=stat_device)
+            losses['train_view_dropout_reject_empty_points'] = torch.tensor(
+                float(view_dropout_state.get('view_dropout_reject_empty_points', 0)),
+                device=stat_device)
+            losses['train_view_dropout_reject_empty_gt'] = torch.tensor(
+                float(view_dropout_state.get('view_dropout_reject_empty_gt', 0)),
+                device=stat_device)
 
         return losses
 
@@ -770,6 +1171,9 @@ class OPUSV1Fusion(MVXTwoStageDetector):
         transformer = getattr(self.pts_bbox_head, 'transformer', None)
         if transformer is not None and hasattr(transformer, 'num_views'):
             return int(transformer.num_views)
+        decoder = getattr(transformer, 'decoder', None) if transformer is not None else None
+        if decoder is not None and hasattr(decoder, 'num_views'):
+            return int(decoder.num_views)
         return 6
 
     def _can_use_online_test(self, img_metas, img):

@@ -1,6 +1,5 @@
 #!/usr/bin/env python3
 import argparse
-import copy
 import importlib
 import json
 import os
@@ -26,6 +25,15 @@ from mmdet3d.registry import DATASETS, MODELS
 from torch.utils.data import DataLoader, Subset
 
 from models.bbox.utils import decode_points
+from vis_utils import (
+    apply_camera_subset_to_cfg,
+    copy_current_frame_images,
+    mask_from_bits,
+    maybe_force_offline_sweeps,
+    resolve_sample_indices,
+    sanitize_name,
+    select_dataset_cfg,
+)
 
 
 DEFAULT_SAVE_DIR = '/root/wjl/OPUS_mmcv2/demos/text_query_similarity'
@@ -49,6 +57,8 @@ def parse_args():
                         help='Number of samples to export when --sample-indices is not set.')
     parser.add_argument('--sample-indices', type=int, nargs='*', default=None,
                         help='Explicit dataset indices to export.')
+    parser.add_argument('--random-sample', action='store_true',
+                        help='Randomly choose max-samples from the split.')
     parser.add_argument('--batch-size', type=int, default=1,
                         help='Inference batch size. Recommended 1.')
     parser.add_argument('--num-workers', type=int, default=2, help='Dataloader workers.')
@@ -66,13 +76,27 @@ def parse_args():
     parser.add_argument('--helper-script', default=osp.join(
         ROOT, 'scripts', 'encode_text_query_talk2dino.py'),
         help='Path to Talk2DINO text helper script.')
+    parser.add_argument('--text-feature-source',
+                        choices=['auto', 'talk2dino', 'prototype_lookup'],
+                        default='auto',
+                        help='How to turn --text-query into a latent vector.')
+    parser.add_argument('--prototype-npz-path', default=None,
+                        help='Prototype npz used by prototype_lookup mode.')
+    parser.add_argument('--prototype-bridge-path', default=None,
+                        help='Optional prototype bridge json used by prototype_lookup mode.')
+    parser.add_argument('--prototype-field', default=None,
+                        help='Prototype latent field name, e.g. latent_256.')
+    parser.add_argument('--active-cameras', nargs='+', default=None,
+                        help='Optional runtime camera subset override.')
+    parser.add_argument('--num-views', type=int, default=None,
+                        help='Current-frame num_views used for image-copy layout. Defaults to active camera count.')
+    parser.add_argument('--view-case-name', default=None,
+                        help='Optional label recorded in output manifest and run name.')
+    parser.add_argument('--no-copy-current-images', action='store_true',
+                        help='Do not copy current-frame images into each sample directory.')
     parser.add_argument('--override', nargs='+', action=DictAction,
                         help='Optional config overrides, e.g. key=value.')
     return parser.parse_args()
-
-
-def sanitize_name(value):
-    return str(value).replace(' ', '_').replace('/', '_').replace('\\', '_')
 
 
 def resolve_checkpoint_path(path):
@@ -122,21 +146,6 @@ def normalize_inputs(inputs):
     if isinstance(img, list) and img and torch.is_tensor(img[0]):
         inputs['img'] = torch.stack(img, dim=0)
     return inputs
-
-
-def select_dataset_cfg(cfg, split):
-    if split == 'test':
-        return copy.deepcopy(cfg.test_dataloader.dataset)
-    if split == 'val':
-        return copy.deepcopy(cfg.val_dataloader.dataset)
-    return copy.deepcopy(cfg.train_dataloader.dataset)
-
-
-def maybe_force_offline_sweeps(dataset_cfg):
-    pipeline = dataset_cfg.get('pipeline', [])
-    for transform in pipeline:
-        if transform.get('type') == 'LoadMultiViewImageFromMultiSweeps':
-            transform['force_offline'] = True
 
 
 def extract_img_metas(data_samples):
@@ -225,26 +234,37 @@ def load_occ_infos(base_dataset, scene_name, token):
         return {k: occ_raw[k] for k in occ_raw.files}
 
 
-def get_mask_camera(data_sample, base_dataset):
+def get_mask_camera(data_sample, base_dataset, active_camera_names=None):
+    scene_name = data_sample.metainfo.get('scene_name', None)
+    sample_token = data_sample.metainfo.get('sample_token', None)
+    occ_infos = load_occ_infos(base_dataset, scene_name, sample_token)
+    if active_camera_names and occ_infos is not None:
+        if 'mask_camera_bits' in occ_infos and 'camera_names' in occ_infos:
+            mask_camera_bits = np.asarray(occ_infos['mask_camera_bits'], dtype=np.uint8)
+            camera_names = [str(x) for x in occ_infos['camera_names'].tolist()]
+            return mask_from_bits(mask_camera_bits, camera_names, active_camera_names), occ_infos, 'subset_bits'
+
     if hasattr(data_sample, 'mask_camera'):
         mask_camera = getattr(data_sample, 'mask_camera')
         if torch.is_tensor(mask_camera):
             mask_camera = mask_camera.detach().cpu().numpy()
         else:
             mask_camera = np.asarray(mask_camera)
-        return mask_camera.astype(np.bool_), None
+        return mask_camera.astype(np.bool_), occ_infos, 'data_sample_mask'
 
-    scene_name = data_sample.metainfo.get('scene_name', None)
-    sample_token = data_sample.metainfo.get('sample_token', None)
-    occ_infos = load_occ_infos(base_dataset, scene_name, sample_token)
     if occ_infos is None or 'mask_camera' not in occ_infos:
-        return None, occ_infos
-    return occ_infos['mask_camera'].astype(np.bool_), occ_infos
+        return None, occ_infos, 'missing'
+    return occ_infos['mask_camera'].astype(np.bool_), occ_infos, 'fallback_full_mask'
 
 
 def apply_sparse_mask(occ_loc, values, dense_mask):
+    outputs = apply_sparse_mask_many(occ_loc, dense_mask, values)
+    return outputs[0], outputs[1]
+
+
+def apply_sparse_mask_many(occ_loc, dense_mask, *arrays):
     if dense_mask is None or occ_loc.size == 0:
-        return occ_loc, values
+        return (occ_loc,) + arrays
 
     occ_idx = occ_loc.astype(np.int64)
     inside = (
@@ -256,7 +276,13 @@ def apply_sparse_mask(occ_loc, values, dense_mask):
     if np.any(inside):
         valid_idx = occ_idx[inside]
         keep[inside] = dense_mask[valid_idx[:, 0], valid_idx[:, 1], valid_idx[:, 2]]
-    return occ_loc[keep], values[keep]
+    masked = [occ_loc[keep]]
+    for values in arrays:
+        if values is None:
+            masked.append(None)
+        else:
+            masked.append(values[keep])
+    return tuple(masked)
 
 
 def build_red_blue_rgb(similarity):
@@ -266,6 +292,42 @@ def build_red_blue_rgb(similarity):
     rgb[:, 1] = 0
     rgb[:, 2] = np.clip(np.round(255.0 * (1.0 - activation)), 0, 255).astype(np.uint8)
     return rgb, activation
+
+
+def build_label_palette(num_classes):
+    rng = np.random.default_rng(seed=2026)
+    palette = rng.integers(0, 256, size=(max(1, int(num_classes)), 3), dtype=np.uint8)
+    palette[0] = np.array([180, 180, 180], dtype=np.uint8)
+    return palette
+
+
+def write_label_ply(path, xyz, rgb, labels):
+    xyz = np.asarray(xyz, dtype=np.float32)
+    rgb = np.asarray(rgb, dtype=np.uint8)
+    labels = np.asarray(labels, dtype=np.int32).reshape(-1, 1)
+    if xyz.ndim != 2 or xyz.shape[1] != 3:
+        raise ValueError(f'xyz must have shape [N, 3], got {xyz.shape}')
+    if rgb.shape != (xyz.shape[0], 3):
+        raise ValueError(f'rgb must have shape {(xyz.shape[0], 3)}, got {rgb.shape}')
+    if labels.shape[0] != xyz.shape[0]:
+        raise ValueError(f'label length mismatch: {labels.shape[0]} vs {xyz.shape[0]}')
+
+    os.makedirs(osp.dirname(path), exist_ok=True)
+    data = np.concatenate([xyz, rgb, labels], axis=1)
+    with open(path, 'w') as handle:
+        handle.write('ply\n')
+        handle.write('format ascii 1.0\n')
+        handle.write(f'element vertex {xyz.shape[0]}\n')
+        handle.write('property float x\n')
+        handle.write('property float y\n')
+        handle.write('property float z\n')
+        handle.write('property uchar red\n')
+        handle.write('property uchar green\n')
+        handle.write('property uchar blue\n')
+        handle.write('property int label\n')
+        handle.write('end_header\n')
+        if data.shape[0] > 0:
+            np.savetxt(handle, data, fmt='%.4f %.4f %.4f %d %d %d %d')
 
 
 def write_similarity_ply(path, xyz, rgb, similarity):
@@ -321,6 +383,124 @@ def resolve_env_python(env_name):
     if osp.isfile(candidate):
         return candidate
     return None
+
+
+def _normalize_lookup_key(text):
+    text = str(text).strip().lower()
+    for ch in ('_', '-', '/', '\\'):
+        text = text.replace(ch, ' ')
+    text = ' '.join(text.split())
+    return text
+
+
+def _resolve_prototype_assets(cfg, args):
+    feature_cfg = cfg.get('model', {}).get('pts_bbox_head', {}).get('feature_supervision', {})
+    prototype_npz_path = args.prototype_npz_path or feature_cfg.get('prototype_npz_path', None)
+    prototype_bridge_path = args.prototype_bridge_path or feature_cfg.get('prototype_bridge_path', None)
+    prototype_field = args.prototype_field or feature_cfg.get('prototype_field', None)
+    if prototype_npz_path is None:
+        raise FileNotFoundError(
+            'prototype_lookup mode requires --prototype-npz-path or feature_supervision.prototype_npz_path in config')
+    if prototype_field is None:
+        raise ValueError(
+            'prototype_lookup mode requires --prototype-field or feature_supervision.prototype_field in config')
+    return (
+        osp.abspath(osp.expanduser(prototype_npz_path)),
+        None if prototype_bridge_path is None else osp.abspath(osp.expanduser(prototype_bridge_path)),
+        str(prototype_field),
+    )
+
+
+def run_prototype_lookup(args, cfg, work_dir):
+    prototype_npz_path, prototype_bridge_path, prototype_field = _resolve_prototype_assets(cfg, args)
+    if not osp.isfile(prototype_npz_path):
+        raise FileNotFoundError(f'Prototype npz not found: {prototype_npz_path}')
+    if prototype_bridge_path is not None and not osp.isfile(prototype_bridge_path):
+        raise FileNotFoundError(f'Prototype bridge json not found: {prototype_bridge_path}')
+
+    np_core = getattr(np, '_core', None)
+    if np_core is None:
+        np_core = np.core
+    sys.modules.setdefault('numpy._core', np_core)
+    np_core_multiarray = getattr(np_core, 'multiarray', None)
+    if np_core_multiarray is not None:
+        sys.modules.setdefault('numpy._core.multiarray', np_core_multiarray)
+
+    with np.load(prototype_npz_path, allow_pickle=True) as data:
+        if prototype_field not in data.files:
+            raise KeyError(f'Prototype field "{prototype_field}" not found in: {prototype_npz_path}')
+        vectors = np.asarray(data[prototype_field], dtype=np.float32)
+        raw_names = [str(x) for x in data['raw_names'].tolist()] if 'raw_names' in data.files else []
+        canonical_names = [
+            str(x) for x in data['matched_canonical_names'].tolist()
+        ] if 'matched_canonical_names' in data.files else []
+
+    lookup = {}
+    match_meta = {}
+    for idx, name in enumerate(raw_names):
+        lookup.setdefault(_normalize_lookup_key(name), idx)
+        match_meta.setdefault(idx, {})['raw_name'] = name
+    for idx, name in enumerate(canonical_names):
+        lookup.setdefault(_normalize_lookup_key(name), idx)
+        match_meta.setdefault(idx, {})['matched_canonical_name'] = name
+
+    bridge_meta = None
+    if prototype_bridge_path is not None:
+        with open(prototype_bridge_path, 'r', encoding='utf-8') as handle:
+            bridge_meta = json.load(handle)
+        for idx, entry in enumerate(bridge_meta.get('entries', [])):
+            if idx >= vectors.shape[0]:
+                break
+            raw_name = entry.get('raw_name', None)
+            canonical_name = entry.get('matched_canonical_name', None)
+            aliases = entry.get('training_aliases', []) or []
+            if raw_name is not None:
+                lookup.setdefault(_normalize_lookup_key(raw_name), idx)
+            if canonical_name is not None:
+                lookup.setdefault(_normalize_lookup_key(canonical_name), idx)
+            for alias in aliases:
+                lookup.setdefault(_normalize_lookup_key(alias), idx)
+            match_meta.setdefault(idx, {}).update(
+                raw_name=raw_name,
+                matched_canonical_name=canonical_name,
+                training_aliases=list(aliases),
+                match_source=entry.get('match_source', None),
+                matched_concept_id=entry.get('matched_concept_id', None),
+            )
+
+    query_key = _normalize_lookup_key(args.text_query)
+    row_idx = lookup.get(query_key, None)
+    if row_idx is None and query_key.endswith('s'):
+        row_idx = lookup.get(query_key[:-1], None)
+    if row_idx is None:
+        raise KeyError(
+            f'Query "{args.text_query}" not found in prototype lookup table: {prototype_npz_path}')
+
+    latent = np.asarray(vectors[row_idx], dtype=np.float32).reshape(-1)
+    norm = float(np.linalg.norm(latent))
+    if norm <= 1e-8:
+        raise ValueError(f'Prototype latent has near-zero norm for query "{args.text_query}"')
+    latent = latent / norm
+
+    latent_path = osp.join(work_dir, 'query_latent.npy')
+    meta_path = osp.join(work_dir, 'query_latent_meta.json')
+    np.save(latent_path, latent.astype(np.float32))
+    meta = dict(
+        source='prototype_lookup',
+        text_query=args.text_query,
+        normalized_query=query_key,
+        matched_row=int(row_idx),
+        prototype_npz_path=prototype_npz_path,
+        prototype_bridge_path=prototype_bridge_path,
+        prototype_field=prototype_field,
+        latent_dim=int(latent.shape[0]),
+        latent_norm_after_normalize=float(np.linalg.norm(latent)),
+        match=match_meta.get(int(row_idx), {}),
+    )
+    with open(meta_path, 'w', encoding='utf-8') as handle:
+        json.dump(meta, handle, indent=2, ensure_ascii=False)
+    print(f'[textsim] prototype lookup matched "{args.text_query}" -> row {row_idx}')
+    return latent.astype(np.float32), meta, latent_path, meta_path
 
 
 def run_text_helper(args, work_dir):
@@ -392,6 +572,23 @@ def run_text_helper(args, work_dir):
     return latent.astype(np.float32), meta, latent_path, meta_path
 
 
+def resolve_text_latent(args, cfg, work_dir):
+    if args.text_feature_source == 'prototype_lookup':
+        return run_prototype_lookup(args, cfg, work_dir)
+
+    if args.text_feature_source == 'talk2dino':
+        return run_text_helper(args, work_dir)
+
+    if args.talk2dino_config and osp.isfile(args.talk2dino_config):
+        try:
+            return run_text_helper(args, work_dir)
+        except Exception as exc:
+            print(f'[textsim] Talk2DINO helper failed, fallback to prototype lookup: {exc}')
+    else:
+        print('[textsim] Talk2DINO config is missing, fallback to prototype lookup.')
+    return run_prototype_lookup(args, cfg, work_dir)
+
+
 def extract_similarity_results(head, pred_dicts, text_latent):
     if head.test_cfg.get('padding', True):
         raise NotImplementedError(
@@ -457,43 +654,71 @@ def extract_similarity_results(head, pred_dicts, text_latent):
         if voxels.numel() == 0:
             result_list.append(dict(
                 occ_loc=np.zeros((0, 3), dtype=np.int64),
-                similarity=np.zeros((0,), dtype=np.float32)))
+                similarity=np.zeros((0,), dtype=np.float32),
+                sem_pred=np.zeros((0,), dtype=np.int64)))
             continue
 
         voxel_feats = F.normalize(voxel_feats, dim=-1)
         similarity = voxel_feats @ text_latent
+        if head.prototype_decode_enabled:
+            if head.prototype_metric != 'cosine':
+                raise ValueError(
+                    f'Unsupported prototype similarity metric: {head.prototype_metric}')
+            semantic_scores = voxel_feats @ head.prototype_bank.t()
+            sem_pred = semantic_scores.argmax(dim=-1)
+        else:
+            sem_pred = scores.argmax(dim=-1)
         result_list.append(dict(
             occ_loc=voxels.detach().cpu().numpy(),
             similarity=similarity.detach().cpu().numpy().astype(np.float32),
+            sem_pred=sem_pred.detach().cpu().numpy().astype(np.int64),
             feature_dims=int(voxel_feats.shape[-1]),
         ))
 
     return result_list
 
 
-def save_sample_outputs(sample_dir, sample_idx, token, occ_loc, similarity, pc_range, voxel_size, max_voxels, seed):
+def save_sample_outputs(sample_dir,
+                        sample_idx,
+                        token,
+                        occ_loc,
+                        similarity,
+                        sem_pred,
+                        pc_range,
+                        voxel_size,
+                        max_voxels,
+                        seed,
+                        label_palette):
     os.makedirs(sample_dir, exist_ok=True)
     xyz = occ_idx_to_xyz(occ_loc, pc_range, voxel_size).astype(np.float32)
     similarity = np.asarray(similarity, dtype=np.float32)
+    sem_pred = np.asarray(sem_pred, dtype=np.int64)
     npz_path = osp.join(sample_dir, f'{sample_idx:0>6}_{token}_textsim_voxel.npz')
     np.savez_compressed(npz_path, occ_loc=occ_loc.astype(np.int64), xyz=xyz, similarity=similarity)
 
     save_xyz = xyz
     save_sim = similarity
+    save_sem = sem_pred
     if max_voxels > 0 and occ_loc.shape[0] > max_voxels:
         rng = np.random.default_rng(seed + sample_idx)
         choice = rng.choice(occ_loc.shape[0], size=max_voxels, replace=False)
         save_xyz = xyz[choice]
         save_sim = similarity[choice]
+        save_sem = sem_pred[choice]
 
     save_rgb, alpha = build_red_blue_rgb(save_sim)
     ply_path = osp.join(sample_dir, f'{sample_idx:0>6}_{token}_textsim_voxel.ply')
     write_similarity_ply(ply_path, save_xyz, save_rgb, save_sim)
+    semantic_rgb = label_palette[np.clip(save_sem, 0, label_palette.shape[0] - 1)]
+    semantic_ply_path = osp.join(sample_dir, f'{sample_idx:0>6}_{token}_semantic_voxel.ply')
+    write_label_ply(semantic_ply_path, save_xyz, semantic_rgb, save_sem)
     return dict(
         npz_path=npz_path,
         ply_path=ply_path,
+        semantic_ply_path=semantic_ply_path,
         num_voxels_full=int(occ_loc.shape[0]),
         num_voxels_ply=int(save_xyz.shape[0]),
+        semantic_unique_classes=sorted(np.unique(sem_pred).astype(int).tolist()) if sem_pred.size > 0 else [],
         similarity_min=float(similarity.min()) if similarity.size > 0 else None,
         similarity_max=float(similarity.max()) if similarity.size > 0 else None,
         similarity_mean=float(similarity.mean()) if similarity.size > 0 else None,
@@ -505,6 +730,8 @@ def save_sample_outputs(sample_dir, sample_idx, token, occ_loc, similarity, pc_r
 
 def main():
     args = parse_args()
+    if args.sample_indices and args.random_sample:
+        raise ValueError('--sample-indices cannot be combined with --random-sample')
 
     from mmdet3d.utils import register_all_modules
     from mmengine.registry import init_default_scope
@@ -519,6 +746,8 @@ def main():
     cfg = Config.fromfile(args.config)
     if args.override is not None:
         cfg.merge_from_dict(args.override)
+    if args.active_cameras:
+        apply_camera_subset_to_cfg(cfg, args.active_cameras)
 
     importlib.import_module('models')
     importlib.import_module('loaders')
@@ -531,11 +760,15 @@ def main():
     run_name = osp.splitext(osp.basename(args.config))[0]
     run_name += '_' + osp.splitext(osp.basename(ckpt_path))[0]
     run_name += '_' + sanitize_name(args.text_query)
+    if args.view_case_name:
+        run_name += '_' + sanitize_name(args.view_case_name)
+    elif args.active_cameras:
+        run_name += '_' + sanitize_name('_'.join(args.active_cameras))
     run_name += '_' + datetime.now().strftime('%Y-%m-%d_%H-%M-%S')
     out_root = osp.join(args.save_dir, f'{args.split}_{run_name}')
     os.makedirs(out_root, exist_ok=True)
 
-    text_latent, text_meta, latent_path, latent_meta_path = run_text_helper(args, out_root)
+    text_latent, text_meta, latent_path, latent_meta_path = resolve_text_latent(args, cfg, out_root)
 
     dataset_cfg = select_dataset_cfg(cfg, args.split)
     maybe_force_offline_sweeps(dataset_cfg)
@@ -544,16 +777,40 @@ def main():
     if hasattr(base_dataset, 'full_init'):
         base_dataset.full_init()
 
-    total_count = len(dataset)
-    if args.sample_indices is not None and len(args.sample_indices) > 0:
-        indices = [index for index in args.sample_indices if 0 <= index < total_count]
-        if len(indices) == 0:
-            raise ValueError('No valid --sample-indices after bounds check.')
+    total_count = len(base_dataset)
+    indices = resolve_sample_indices(
+        total_count=total_count,
+        max_samples=args.max_samples,
+        sample_indices=args.sample_indices,
+        random_sample=args.random_sample,
+        seed=args.seed)
+    if indices != list(range(total_count)):
         dataset = Subset(dataset, indices)
-        print(f'[textsim] using explicit indices: {indices}')
-    elif args.max_samples > 0:
-        count = min(args.max_samples, total_count)
-        dataset = Subset(dataset, list(range(count)))
+        print(f'[textsim] using target indices: {indices}')
+    else:
+        indices = list(range(total_count))
+
+    dataset_data_root = dataset_cfg.get('data_root', None)
+    active_camera_names = [str(x) for x in (args.active_cameras or [])]
+    if not active_camera_names:
+        active_camera_names = [
+            str(x) for x in dataset_cfg.get(
+                'dataset_cfg', {}).get(
+                'cam_types',
+                getattr(base_dataset, 'dataset_cfg', {}).get('cam_types', []))
+        ]
+    if args.num_views is not None:
+        copy_num_views = int(args.num_views)
+    elif active_camera_names:
+        copy_num_views = len(active_camera_names)
+    else:
+        copy_num_views = int(
+            dataset_cfg.get('dataset_cfg', {}).get(
+                'num_views',
+                getattr(base_dataset, 'dataset_cfg', {}).get('num_views', 0)))
+    if active_camera_names and copy_num_views not in (0, len(active_camera_names)):
+        raise ValueError(
+            f'--num-views={copy_num_views} is inconsistent with active camera count={len(active_camera_names)}')
 
     sampler = DefaultSampler(dataset, shuffle=False)
     dataloader = DataLoader(
@@ -573,11 +830,20 @@ def main():
 
     pc_range = np.asarray(cfg.point_cloud_range, dtype=np.float64)
     voxel_size = np.asarray(cfg.voxel_size, dtype=np.float64)
+    class_names = list(getattr(model.pts_bbox_head, 'prototype_label_names', []) or [])
+    if not class_names:
+        class_names = list(cfg.get('model', {}).get('pts_bbox_head', {}).get(
+            'feature_supervision', {}).get('class_names', []))
+    if not class_names:
+        class_names = list(dataset_cfg.get('dataset_cfg', {}).get('class_names', []))
+    label_palette = build_label_palette(max(len(class_names), int(getattr(model.pts_bbox_head, 'num_classes', 1))))
 
     print(f'[textsim] config: {args.config}')
     print(f'[textsim] checkpoint: {ckpt_path}')
     print(f'[textsim] split: {args.split}, dataset size: {len(dataset)}')
     print(f'[textsim] text query: {args.text_query}')
+    print(f'[textsim] text source: {text_meta.get("source", args.text_feature_source)}')
+    print(f'[textsim] active cameras: {active_camera_names if active_camera_names else "all-configured"}')
     print(f'[textsim] output dir: {out_root}')
 
     records = []
@@ -599,17 +865,24 @@ def main():
                 scene = sanitize_name(meta.get('scene_name', 'unknown_scene'))
                 sample_dir = osp.join(out_root, scene, token)
 
-                occ_loc = similarity_results[local_idx]['occ_loc']
-                similarity = similarity_results[local_idx]['similarity']
+                occ_loc_full = similarity_results[local_idx]['occ_loc']
+                similarity_full = similarity_results[local_idx]['similarity']
+                sem_pred_full = similarity_results[local_idx]['sem_pred']
+                occ_loc = occ_loc_full
+                similarity = similarity_full
+                sem_pred = sem_pred_full
+                mask_mode = 'disabled' if args.disable_camera_mask else 'missing'
 
                 if not args.disable_camera_mask:
-                    mask_camera, _ = get_mask_camera(data_sample, base_dataset)
+                    mask_camera, _, mask_mode = get_mask_camera(
+                        data_sample, base_dataset, active_camera_names=active_camera_names)
                     if mask_camera is None:
                         if not camera_mask_warned:
                             print('[textsim] mask_camera not found, keep unmasked predictions.')
                             camera_mask_warned = True
                     else:
-                        occ_loc, similarity = apply_sparse_mask(occ_loc, similarity, mask_camera)
+                        occ_loc, similarity, sem_pred = apply_sparse_mask_many(
+                            occ_loc_full, mask_camera, similarity_full, sem_pred_full)
 
                 save_info = save_sample_outputs(
                     sample_dir=sample_dir,
@@ -617,16 +890,30 @@ def main():
                     token=token,
                     occ_loc=occ_loc,
                     similarity=similarity,
+                    sem_pred=sem_pred,
                     pc_range=pc_range,
                     voxel_size=voxel_size,
                     max_voxels=args.max_voxels,
-                    seed=args.seed)
+                    seed=args.seed,
+                    label_palette=label_palette)
+                copied_current_images = 0
+                if not args.no_copy_current_images:
+                    copied_current_images = copy_current_frame_images(
+                        meta=meta,
+                        sample_dir=sample_dir,
+                        data_root=dataset_data_root,
+                        num_views=max(1, copy_num_views),
+                    )
 
                 record = dict(
                     sample_idx=sample_idx,
                     scene_name=scene,
                     token=token,
                     feature_dims=similarity_results[local_idx].get('feature_dims', None),
+                    mask_mode=mask_mode,
+                    copied_current_images=int(copied_current_images),
+                    active_cam_names=list(active_camera_names),
+                    semantic_class_names=class_names,
                     disable_camera_mask=bool(args.disable_camera_mask),
                     **save_info,
                 )
@@ -639,7 +926,14 @@ def main():
         config=osp.abspath(args.config),
         weights=ckpt_path,
         split=args.split,
+        prediction_adapter='talk2dino_textsim',
         text_query=args.text_query,
+        view_case_name=args.view_case_name,
+        random_sample=bool(args.random_sample),
+        target_sample_indices=[int(i) for i in indices],
+        active_cam_names=list(active_camera_names),
+        copy_current_images=bool(not args.no_copy_current_images),
+        num_views=int(max(1, copy_num_views)),
         disable_camera_mask=bool(args.disable_camera_mask),
         helper_script=osp.abspath(args.helper_script),
         talk2dino_env=args.talk2dino_env,

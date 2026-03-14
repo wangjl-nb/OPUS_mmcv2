@@ -73,6 +73,37 @@ class TartangroundOcc3DDataset(BaseDataset):
 
         return all_sweeps_prev, all_sweeps_next
 
+    def _target_cam_types(self, info):
+        configured = self.dataset_cfg.get('cam_types', None)
+        if configured:
+            target = [cam_name for cam_name in configured]
+            missing = [cam_name for cam_name in target if cam_name not in info.get('cams', {})]
+            if missing:
+                raise KeyError(
+                    f'Missing configured cameras {missing} in sample token={info.get("token")}')
+            return target
+        return list(info['cams'].keys())
+
+    @staticmethod
+    def _filter_cam_group(cam_group, cam_types):
+        if not isinstance(cam_group, dict):
+            return cam_group
+        filtered = {}
+        for cam_name in cam_types:
+            if cam_name in cam_group:
+                filtered[cam_name] = cam_group[cam_name]
+        return filtered
+
+    def _filter_cam_sweeps(self, sweeps, cam_types):
+        filtered = []
+        for sweep in sweeps:
+            if not isinstance(sweep, dict):
+                continue
+            filtered_sweep = self._filter_cam_group(sweep, cam_types)
+            if filtered_sweep:
+                filtered.append(filtered_sweep)
+        return filtered
+
     def collect_lidar_sweeps(self, index, into_past=20, into_future=0):
         all_sweeps_prev = []
         curr_index = index
@@ -139,9 +170,11 @@ class TartangroundOcc3DDataset(BaseDataset):
             img_paths = []
             img_timestamps = []
             ego2img = []
-            cam_types = list(info['cams'].keys())
+            cam_types = self._target_cam_types(info)
+            filtered_cams = self._filter_cam_group(info['cams'], cam_types)
 
-            for _, cam_info in info['cams'].items():
+            for cam_name in cam_types:
+                cam_info = filtered_cams[cam_name]
                 img_paths.append(os.path.relpath(cam_info['data_path']))
                 img_timestamps.append(cam_info['timestamp'] / 1e6)
                 ego2img.append(
@@ -155,11 +188,13 @@ class TartangroundOcc3DDataset(BaseDataset):
                 )
 
             cam_sweeps_prev, cam_sweeps_next = self.collect_cam_sweeps(index)
+            cam_sweeps_prev = self._filter_cam_sweeps(cam_sweeps_prev, cam_types)
+            cam_sweeps_next = self._filter_cam_sweeps(cam_sweeps_next, cam_types)
 
             input_dict.update(dict(
                 img_filename=img_paths,
                 img_timestamp=img_timestamps,
-                cams=info['cams'],
+                cams=filtered_cams,
                 ego2img=ego2img,
                 cam_sweeps={'prev': cam_sweeps_prev, 'next': cam_sweeps_next},
                 cam_types=cam_types,
@@ -202,6 +237,12 @@ class TartangroundOcc3DDataset(BaseDataset):
                 'mask_camera_key', occ_io_cfg.get('mask_camera_key', 'mask_camera')),
             mask_lidar_key=eval_kwargs.get(
                 'mask_lidar_key', occ_io_cfg.get('mask_lidar_key', 'mask_lidar')),
+            mask_camera_bits_key=eval_kwargs.get(
+                'mask_camera_bits_key', occ_io_cfg.get('mask_camera_bits_key', None)),
+            camera_names_key=eval_kwargs.get(
+                'camera_names_key', occ_io_cfg.get('camera_names_key', None)),
+            mask_camera_select_names=eval_kwargs.get(
+                'mask_camera_select_names', occ_io_cfg.get('mask_camera_select_names', None)),
         )
 
     def evaluate(self, occ_results, runner=None, show_dir=None, **eval_kwargs):
