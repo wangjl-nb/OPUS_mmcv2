@@ -244,6 +244,9 @@ class LoadOcc3DFromFile:
                  semantics_key='semantics',
                  mask_camera_key='mask_camera',
                  mask_lidar_key='mask_lidar',
+                 mask_camera_bits_key=None,
+                 camera_names_key=None,
+                 mask_camera_select_names=None,
                  class_names=None,
                  empty_label=None):
         self.occ_root = occ_root
@@ -252,6 +255,9 @@ class LoadOcc3DFromFile:
         self.semantics_key = semantics_key
         self.mask_camera_key = mask_camera_key
         self.mask_lidar_key = mask_lidar_key
+        self.mask_camera_bits_key = mask_camera_bits_key
+        self.camera_names_key = camera_names_key
+        self.mask_camera_select_names = tuple(mask_camera_select_names or ())
         self.occ_class_names = class_names or list(DEFAULT_OCC3D_CLASS_NAMES)
         self.empty_label = len(self.occ_class_names) - 1 if empty_label is None else int(empty_label)
 
@@ -263,6 +269,15 @@ class LoadOcc3DFromFile:
             fmt.setdefault('sample_token', results['token'])
         return osp.join(self.occ_root, self.path_template.format(**fmt))
 
+    @staticmethod
+    def _mask_from_bits(mask_camera_bits, camera_names, selected_names):
+        selected = set(selected_names)
+        mask = np.zeros_like(mask_camera_bits, dtype=np.bool_)
+        for cam_idx, cam_name in enumerate(camera_names):
+            if cam_name in selected:
+                mask |= (mask_camera_bits & (1 << cam_idx)) != 0
+        return mask
+
     def __call__(self, results):
         occ_file = self._build_occ_path(results)
         occ_labels = np.load(occ_file)
@@ -272,8 +287,25 @@ class LoadOcc3DFromFile:
         mask_lidar = occ_labels[self.mask_lidar_key].astype(np.bool_)             if self.mask_lidar_key in occ_labels else np.ones(mask_shape, dtype=np.bool_)
         mask_camera = occ_labels[self.mask_camera_key].astype(np.bool_)             if self.mask_camera_key in occ_labels else np.ones(mask_shape, dtype=np.bool_)
 
+        mask_camera_bits = None
+        camera_names = None
+        if self.mask_camera_bits_key and self.mask_camera_bits_key in occ_labels:
+            mask_camera_bits = np.asarray(occ_labels[self.mask_camera_bits_key], dtype=np.uint8)
+        if self.camera_names_key and self.camera_names_key in occ_labels:
+            camera_names = [str(x) for x in occ_labels[self.camera_names_key].tolist()]
+
+        if mask_camera_bits is not None and camera_names is not None and self.mask_camera_select_names:
+            mask_camera = self._mask_from_bits(
+                mask_camera_bits,
+                camera_names,
+                self.mask_camera_select_names)
+
         results['mask_lidar'] = mask_lidar
         results['mask_camera'] = mask_camera
+        if mask_camera_bits is not None:
+            results['mask_camera_bits'] = np.ascontiguousarray(mask_camera_bits)
+        if camera_names is not None:
+            results['mask_camera_names'] = list(camera_names)
 
         if self.ignore_class_names:
             for class_id, class_name in enumerate(self.occ_class_names):
@@ -333,6 +365,45 @@ class LoadOccupancyFromFile:
         semantics[coors[:, 2], coors[:, 1], coors[:, 0]] = labels
         results['voxel_semantics'] = np.ascontiguousarray(semantics)
         return results
+
+
+@TRANSFORMS.register_module()
+class PointsRangeFilterWithViewIds:
+
+    def __init__(self,
+                 point_cloud_range,
+                 point_view_ids_key='depth_point_view_ids'):
+        self.pcd_range = np.array(point_cloud_range, dtype=np.float32)
+        self.point_view_ids_key = point_view_ids_key
+
+    def __call__(self, results):
+        points = results['points']
+        points_mask = points.in_range_3d(self.pcd_range)
+        clean_points = points[points_mask]
+        results['points'] = clean_points
+        points_mask_np = points_mask.numpy()
+
+        pts_instance_mask = results.get('pts_instance_mask', None)
+        pts_semantic_mask = results.get('pts_semantic_mask', None)
+        if pts_instance_mask is not None:
+            results['pts_instance_mask'] = pts_instance_mask[points_mask_np]
+        if pts_semantic_mask is not None:
+            results['pts_semantic_mask'] = pts_semantic_mask[points_mask_np]
+
+        if self.point_view_ids_key and self.point_view_ids_key in results:
+            point_view_ids = np.asarray(results[self.point_view_ids_key])
+            if point_view_ids.shape[0] != points_mask_np.shape[0]:
+                raise ValueError(
+                    f'{self.point_view_ids_key} length mismatch before range filter: '
+                    f'got {point_view_ids.shape[0]}, expected {points_mask_np.shape[0]}')
+            results[self.point_view_ids_key] = np.ascontiguousarray(point_view_ids[points_mask_np])
+        return results
+
+    def __repr__(self):
+        repr_str = self.__class__.__name__
+        repr_str += f'(point_cloud_range={self.pcd_range.tolist()}, '
+        repr_str += f'point_view_ids_key={self.point_view_ids_key})'
+        return repr_str
 
 
 @TRANSFORMS.register_module()
@@ -686,7 +757,8 @@ class LoadPointsFromMultiViewDepth:
                  strict_depth_exist=False,
                  fallback_depth_from_image_path=True,
                  history_dynamic_extrinsics=True,
-                 dynamic_extrinsics_fallback='static'):
+                 dynamic_extrinsics_fallback='static',
+                 output_view_ids_key='depth_point_view_ids'):
         if isinstance(use_dim, int):
             use_dim = list(range(use_dim))
         assert max(use_dim) < load_dim, \
@@ -712,6 +784,7 @@ class LoadPointsFromMultiViewDepth:
         self.fallback_depth_from_image_path = bool(fallback_depth_from_image_path)
         self.history_dynamic_extrinsics = bool(history_dynamic_extrinsics)
         self.dynamic_extrinsics_fallback = dynamic_extrinsics_fallback
+        self.output_view_ids_key = output_view_ids_key
 
     def _path_keys(self, path):
         if not isinstance(path, str) or not path:
@@ -951,6 +1024,7 @@ class LoadPointsFromMultiViewDepth:
         base_timestamp = float(results.get('timestamp', 0.0))
 
         point_chunks = []
+        point_view_id_chunks = []
         for idx, image_path in enumerate(filenames):
             match = None
             for key in self._path_keys(image_path):
@@ -999,19 +1073,26 @@ class LoadPointsFromMultiViewDepth:
             time_col = np.full((pts_lidar.shape[0], 1), time_delta, dtype=np.float32)
             pts = np.concatenate([pts_lidar.astype(np.float32), intensity, time_col], axis=1)
             point_chunks.append(pts)
+            point_view_id_chunks.append(
+                np.full((pts_lidar.shape[0],), idx, dtype=np.int32))
 
         if point_chunks:
             points = np.concatenate(point_chunks, axis=0)
+            point_view_ids = np.concatenate(point_view_id_chunks, axis=0)
         else:
             points = np.zeros((0, self.load_dim), dtype=np.float32)
+            point_view_ids = np.zeros((0,), dtype=np.int32)
 
         if self.max_points_total > 0 and points.shape[0] > self.max_points_total:
             choice = np.random.choice(points.shape[0], self.max_points_total, replace=False)
             points = points[choice]
+            point_view_ids = point_view_ids[choice]
 
         points = points[:, self.use_dim]
         points_class = get_points_type(self.coord_type)
         results['points'] = points_class(points, points_dim=points.shape[-1], attribute_dims=None)
+        if self.output_view_ids_key:
+            results[self.output_view_ids_key] = np.ascontiguousarray(point_view_ids)
         return results
 
 

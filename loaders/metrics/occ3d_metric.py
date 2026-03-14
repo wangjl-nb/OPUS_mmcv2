@@ -235,6 +235,9 @@ class Occ3DMetric(BaseMetric):
                  semantics_key='semantics',
                  mask_camera_key='mask_camera',
                  mask_lidar_key='mask_lidar',
+                 mask_camera_bits_key=None,
+                 camera_names_key=None,
+                 mask_camera_select_names=None,
                  ray_num_workers=8,
                  ray_cfg=None,
                  focus_eval=None,
@@ -257,11 +260,23 @@ class Occ3DMetric(BaseMetric):
         self.semantics_key = semantics_key
         self.mask_camera_key = mask_camera_key
         self.mask_lidar_key = mask_lidar_key
+        self.mask_camera_bits_key = mask_camera_bits_key
+        self.camera_names_key = camera_names_key
+        self.mask_camera_select_names = tuple(mask_camera_select_names or ())
 
         self.ray_num_workers = ray_num_workers
         self.ray_cfg = ray_cfg or {}
         self.focus_eval = focus_eval or {}
         self.focus_class_freq_ema = None
+
+    @staticmethod
+    def _mask_from_bits(mask_camera_bits, camera_names, selected_names):
+        selected = set(selected_names)
+        mask = np.zeros_like(mask_camera_bits, dtype=np.bool_)
+        for cam_idx, cam_name in enumerate(camera_names):
+            if cam_name in selected:
+                mask |= (mask_camera_bits & (1 << cam_idx)) != 0
+        return mask
 
 
     def _class_name(self, class_idx):
@@ -394,7 +409,17 @@ class Occ3DMetric(BaseMetric):
         with np.load(occ_file) as occ_infos:
             occ_labels = np.asarray(occ_infos[self.semantics_key], dtype=np.uint8)
             if self.use_camera_mask:
-                if self.mask_camera_key in occ_infos:
+                if self.mask_camera_bits_key in occ_infos and \
+                        self.camera_names_key in occ_infos and \
+                        self.mask_camera_select_names:
+                    mask_camera_bits = np.asarray(
+                        occ_infos[self.mask_camera_bits_key], dtype=np.uint8)
+                    camera_names = [str(x) for x in occ_infos[self.camera_names_key].tolist()]
+                    mask = self._mask_from_bits(
+                        mask_camera_bits,
+                        camera_names,
+                        self.mask_camera_select_names)
+                elif self.mask_camera_key in occ_infos:
                     mask = np.asarray(occ_infos[self.mask_camera_key], dtype=np.bool_)
                 else:
                     mask = np.ones_like(occ_labels, dtype=np.bool_)

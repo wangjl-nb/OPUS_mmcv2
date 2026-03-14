@@ -835,18 +835,31 @@ class OPUSV1FusionHead(BaseModule):
             feat_scores = feat_scores.reshape(num_imgs, -1, self.feature_dims)
         refine_pts = refine_pts.reshape(num_imgs, -1, 3)
         refine_pts = decode_points(refine_pts, self.pc_range)
-        score_preds_list = [score_preds[i] for i in range(num_imgs)]
-        feat_scores_list = [feat_scores[i] for i in range(num_imgs)] if feat_scores is not None else None
-        refine_pts_list = [refine_pts[i] for i in range(num_imgs)]
+        valid_sample_ids = [
+            i for i in range(num_imgs)
+            if gt_points_list[i] is not None and gt_points_list[i].numel() > 0
+        ]
+        if not valid_sample_ids:
+            zero_score = score_preds.sum() * 0.0
+            zero_pts = refine_pts.sum() * 0.0
+            zero_feat = feat_scores.sum() * 0.0 if feat_scores is not None else None
+            return zero_score, zero_pts, zero_feat
 
-        tail_mask_list = [tail_class_mask for _ in range(num_imgs)]
+        score_preds_list = [score_preds[i] for i in valid_sample_ids]
+        feat_scores_list = [feat_scores[i] for i in valid_sample_ids] if feat_scores is not None else None
+        refine_pts_list = [refine_pts[i] for i in valid_sample_ids]
+        gt_points_list = [gt_points_list[i] for i in valid_sample_ids]
+        gt_masks_list = [gt_masks_list[i] for i in valid_sample_ids]
+        gt_labels_list = [gt_labels_list[i] for i in valid_sample_ids]
+
+        tail_mask_list = [tail_class_mask for _ in range(len(valid_sample_ids))]
         (labels_list, gt_paired_idx_list, pred_paired_idx_list, cls_weights,
          gt_pts_weights) = multi_apply(
              self._get_target_single, refine_pts_list, gt_points_list,
              gt_masks_list, gt_labels_list, tail_mask_list)
 
         gt_paired_pts, pred_paired_pts = [], []
-        for i in range(num_imgs):
+        for i in range(len(valid_sample_ids)):
             gt_paired_pts.append(refine_pts_list[i][gt_paired_idx_list[i]])
             pred_paired_pts.append(gt_points_list[i][pred_paired_idx_list[i]])
 
@@ -1109,12 +1122,5 @@ class OPUSV1FusionHead(BaseModule):
             else:
                 # Legacy behavior: use camera visibility to reweight non-empty GT.
                 gt_masks.append(mask_camera[i][non_empty_mask])
-
-        for i, pts in enumerate(gt_points):
-            if pts.numel() == 0:
-                mask_count = int(mask_camera[i].sum().item())
-                raise FloatingPointError(
-                    f'Empty gt_points for batch {i}; check voxel_semantics/mask_camera '
-                    f'(mask_camera sum={mask_count})')
 
         return gt_points, gt_masks, gt_labels
